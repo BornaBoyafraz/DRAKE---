@@ -10,9 +10,9 @@ kernel is itself compiled code, not interpreted code.
 
 The generated logic is branch-free: for each boundary ``b`` it computes
 ``zext(seq_len >= b)`` and sums those zero/one values to get the bucket
-index along that axis, exactly mirroring
-``drake.passes.specialize.classify``. Semantic equivalence between the two
-is checked exhaustively in ``tests/test_dispatch_jit.py``.
+index along that axis, exactly mirroring ``passes.specialize.classify``.
+Semantic equivalence between the two is checked exhaustively in
+``tests/test_dispatch_jit.py``.
 """
 
 from __future__ import annotations
@@ -31,7 +31,8 @@ def _ensure_llvm_initialized() -> None:
     global _LLVM_INITIALIZED
     if _LLVM_INITIALIZED:
         return
-    llvm.initialize()
+    # llvmlite >= 0.44 initializes LLVM core automatically; only the native
+    # target/asm-printer registration below is still required for JIT codegen.
     llvm.initialize_native_target()
     llvm.initialize_native_asmprinter()
     _LLVM_INITIALIZED = True

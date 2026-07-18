@@ -65,10 +65,8 @@ def _make_fused_op(window: List[Op], fused_kind: str, index: int) -> Op:
     all_inputs = [t for op in window for t in op.inputs]
     all_outputs = [t for op in window for t in op.outputs]
     internal = set(all_outputs) & set(all_inputs)
-    ext_inputs = [t for t in all_inputs if t not in internal or t not in all_outputs]
-    # de-duplicate while preserving order
-    seen = set()
     inputs = []
+    seen = set()
     for t in all_inputs:
         if t in internal:
             continue
@@ -134,7 +132,7 @@ class FusionPass:
         return new_graph, records
 
 
-def traffic_saved_bytes(fused_op: Op, graph: Graph, dims: Dict[str, int]) -> int:
+def traffic_saved_bytes(fused_op: Op, original_graph: Graph, dims: Dict[str, int]) -> int:
     """Analytic HBM-traffic bytes saved by fusing `fused_op`'s sub-ops.
 
     For every tensor produced inside the fused group and consumed by a later
@@ -142,6 +140,13 @@ def traffic_saved_bytes(fused_op: Op, graph: Graph, dims: Dict[str, int]) -> int
     elides both the write and the read-back (2x). If something outside the
     group still needs it (e.g. it's a graph output, like the updated KV
     cache), fusion still avoids the *internal* read-back, saving 1x.
+
+    `original_graph` must be the *pre-fusion* graph (e.g. the one passed
+    into ``FusionPass.run``), not the fused result -- once fusion has run,
+    a fused op's own `.inputs` no longer lists the tensors internal to its
+    sub-ops, so `consumer_count` against the fused graph would undercount
+    external consumers (notably graph outputs like the KV cache) and wrongly
+    treat them as fully elided.
     """
     if fused_op.kind != "fused":
         return 0
@@ -152,9 +157,9 @@ def traffic_saved_bytes(fused_op: Op, graph: Graph, dims: Dict[str, int]) -> int
             consumed_later_internally = any(t in later.inputs for later in sub_ops[k + 1 :])
             if not consumed_later_internally:
                 continue
-            total_consumers = graph.consumer_count(t)
+            total_consumers = original_graph.consumer_count(t)
             internal_consumers = sum(1 for later in sub_ops[k + 1 :] if t in later.inputs)
             external_consumers = total_consumers - internal_consumers
             multiplier = 2 if external_consumers <= 0 else 1
-            total += multiplier * graph.bytes_of(t, dims)
+            total += multiplier * original_graph.bytes_of(t, dims)
     return total
