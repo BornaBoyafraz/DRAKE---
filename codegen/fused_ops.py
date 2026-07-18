@@ -21,7 +21,7 @@ from typing import Callable, Dict
 
 import numpy as np
 
-from ..ir import Dims, Graph, Op
+from ir import Dims, Graph, Op
 
 Tensors = Dict[str, np.ndarray]
 

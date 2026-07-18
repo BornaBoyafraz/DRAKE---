@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Tuple
 
-from ..ir import Graph, Op
+from ir import Graph, Op
 
 DEFAULT_SEQ_BOUNDARIES: Tuple[int, ...] = (128, 1024)
 DEFAULT_BATCH_BOUNDARIES: Tuple[int, ...] = (8,)

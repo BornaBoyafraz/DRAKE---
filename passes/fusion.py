@@ -26,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-from ..ir import Graph, Op
+from ir import Graph, Op
 
 # Longest patterns first so the greedy scan prefers larger fusion groups.
 PATTERNS: List[Tuple[Tuple[str, ...], str]] = [
