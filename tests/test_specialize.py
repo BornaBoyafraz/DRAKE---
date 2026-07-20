@@ -1,4 +1,3 @@
-import itertools
 
 from ir import build_decode_step_graph
 from passes.fusion import FusionPass

@@ -21,7 +21,7 @@ from typing import Callable, Dict
 
 import numpy as np
 
-from ir import Dims, Graph, Op
+from ir import Dims, Graph, Op, cache_io_names, weight_names
 
 Tensors = Dict[str, np.ndarray]
 
@@ -140,26 +140,41 @@ def execute_graph(graph: Graph, tensors: Tensors, dims: Dims) -> Tensors:
     return tensors
 
 
-def init_weights(dims: Dims, seed: int = 0) -> Tensors:
-    rng = np.random.default_rng(seed)
+def init_weights(dims: Dims, seed: int = 0, num_layers: int = 1) -> Tensors:
+    """Random weights for every layer. Each layer draws from its own RNG
+    stream (seeded `seed + layer_index`) so layers don't share weights.
+    `num_layers=1` draws in the exact same order as the original
+    single-layer implementation, so existing callers get bit-identical
+    tensors.
+    """
     hidden, qkv, ffn = dims["hidden_dim"], dims["qkv_dim"], dims["ffn_dim"]
     scale = 0.02
-    return {
-        "w_norm1": np.ones(hidden, dtype=np.float32),
-        "w_qkv": (rng.standard_normal((hidden, qkv)) * scale).astype(np.float32),
-        "w_o": (rng.standard_normal((hidden, hidden)) * scale).astype(np.float32),
-        "w_norm2": np.ones(hidden, dtype=np.float32),
-        "w_up": (rng.standard_normal((hidden, ffn)) * scale).astype(np.float32),
-        "w_down": (rng.standard_normal((ffn, hidden)) * scale).astype(np.float32),
-    }
+    tensors: Tensors = {}
+    for i in range(num_layers):
+        rng = np.random.default_rng(seed + i)
+        names = weight_names(num_layers, i)
+        tensors[names["w_norm1"]] = np.ones(hidden, dtype=np.float32)
+        tensors[names["w_qkv"]] = (rng.standard_normal((hidden, qkv)) * scale).astype(np.float32)
+        tensors[names["w_o"]] = (rng.standard_normal((hidden, hidden)) * scale).astype(np.float32)
+        tensors[names["w_norm2"]] = np.ones(hidden, dtype=np.float32)
+        tensors[names["w_up"]] = (rng.standard_normal((hidden, ffn)) * scale).astype(np.float32)
+        tensors[names["w_down"]] = (rng.standard_normal((ffn, hidden)) * scale).astype(np.float32)
+    return tensors
 
 
-def init_step_inputs(dims: Dims, seed: int = 1) -> Tensors:
+def init_step_inputs(dims: Dims, seed: int = 1, num_layers: int = 1) -> Tensors:
+    """Random `x` plus a starting KV cache for every layer. `num_layers=1`
+    draws in the exact same order as the original single-layer
+    implementation, so existing callers get bit-identical tensors.
+    """
     rng = np.random.default_rng(seed)
     batch, hidden = dims["batch"], dims["hidden_dim"]
     seq_len, n_heads, head_dim = dims["seq_len"], dims["n_heads"], dims["head_dim"]
     x = (rng.standard_normal((batch, hidden)) * 0.1).astype(np.float32)
     cache_shape = (batch, seq_len, n_heads, head_dim)
-    cache_k = (rng.standard_normal(cache_shape) * 0.1).astype(np.float32)
-    cache_v = (rng.standard_normal(cache_shape) * 0.1).astype(np.float32)
-    return {"x": x, "cache_k_in": cache_k, "cache_v_in": cache_v}
+    tensors: Tensors = {"x": x}
+    for i in range(num_layers):
+        k_in, v_in, _, _ = cache_io_names(num_layers, i)
+        tensors[k_in] = (rng.standard_normal(cache_shape) * 0.1).astype(np.float32)
+        tensors[v_in] = (rng.standard_normal(cache_shape) * 0.1).astype(np.float32)
+    return tensors

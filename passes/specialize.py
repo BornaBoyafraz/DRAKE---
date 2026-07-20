@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Tuple
 
-from ir import Graph, Op
+from ir import Graph
 
 DEFAULT_SEQ_BOUNDARIES: Tuple[int, ...] = (128, 1024)
 DEFAULT_BATCH_BOUNDARIES: Tuple[int, ...] = (8,)
@@ -103,7 +103,7 @@ class SpecializationPass:
     def specialize(self, fused_graph: Graph, bucket: ShapeBucket) -> KernelPlan:
         variants: Dict[str, KernelVariant] = {}
         for op in fused_graph.ops:
-            fused_kind = op.attrs.get("fused_kind") if op.kind == "fused" else op.kind
+            fused_kind = op.attrs.get("fused_kind", op.kind) if op.kind == "fused" else op.kind
             variants[op.name] = self._variant_for(fused_kind, bucket)
         return KernelPlan(bucket=bucket, variants=variants)
 

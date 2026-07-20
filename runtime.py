@@ -12,14 +12,14 @@ Call sequence per `step()`:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
 from codegen.dispatch_jit import DispatchEngine, compile_dispatch_engine
 from codegen.fused_ops import Tensors, execute_graph, init_weights
-from ir import Graph, build_decode_step_graph
-from passes.fusion import FusionPass, FusionRecord, traffic_saved_bytes
+from ir import Graph, build_decode_step_graph, cache_io_names
+from passes.fusion import FusionPass, traffic_saved_bytes
 from passes.specialize import (
     DEFAULT_BATCH_BOUNDARIES,
     DEFAULT_SEQ_BOUNDARIES,
@@ -30,12 +30,18 @@ from passes.specialize import (
 )
 from profiler import ShapeProfiler
 
+CacheArg = Union[np.ndarray, List[np.ndarray]]
+
+
+def _as_list(arg: CacheArg) -> List[np.ndarray]:
+    return arg if isinstance(arg, list) else [arg]
+
 
 @dataclass
 class StepResult:
     output: np.ndarray
-    cache_k_out: np.ndarray
-    cache_v_out: np.ndarray
+    cache_k_out: CacheArg
+    cache_v_out: CacheArg
     bucket: ShapeBucket
     plan: KernelPlan
     traffic_saved_bytes: int
@@ -48,12 +54,14 @@ class DrakeEngine:
         n_heads: int,
         head_dim: int,
         ffn_dim: int,
+        num_layers: int = 1,
         seq_boundaries: Sequence[int] = DEFAULT_SEQ_BOUNDARIES,
         batch_boundaries: Sequence[int] = DEFAULT_BATCH_BOUNDARIES,
         weight_seed: int = 0,
         graph: Optional[Graph] = None,
     ) -> None:
-        self.base_graph = graph if graph is not None else build_decode_step_graph()
+        self.num_layers = num_layers
+        self.base_graph = graph if graph is not None else build_decode_step_graph(num_layers)
         self.fused_graph, self.fusion_records = FusionPass().run(self.base_graph)
 
         self.seq_boundaries = tuple(seq_boundaries)
@@ -70,15 +78,26 @@ class DrakeEngine:
             "qkv_dim": 3 * hidden_dim,
             "ffn_dim": ffn_dim,
         }
-        self.weights: Tensors = init_weights(self.static_dims, seed=weight_seed)
+        self.weights: Tensors = init_weights(self.static_dims, seed=weight_seed, num_layers=num_layers)
 
         self.profiler = ShapeProfiler()
         self.specializer = SpecializationPass()
         self.plan_cache: Dict[int, KernelPlan] = {}
 
-    def step(self, x: np.ndarray, cache_k_in: np.ndarray, cache_v_in: np.ndarray) -> StepResult:
+    def step(self, x: np.ndarray, cache_k_in: CacheArg, cache_v_in: CacheArg) -> StepResult:
+        """Run one decode step.
+
+        For `num_layers == 1` (the common case), `cache_k_in`/`cache_v_in`
+        are plain arrays and `cache_k_out`/`cache_v_out` on the result are
+        too -- unchanged from the original single-layer API. For
+        `num_layers > 1`, pass/receive a list of one array per layer, in
+        layer order.
+        """
+        k_list = _as_list(cache_k_in)
+        v_list = _as_list(cache_v_in)
+
         batch = x.shape[0]
-        seq_len = cache_k_in.shape[1]
+        seq_len = k_list[0].shape[1]
         self.profiler.record(seq_len, batch)
 
         bucket_id = self.dispatch_engine.classify(seq_len, batch)
@@ -92,7 +111,11 @@ class DrakeEngine:
         dims.update({"batch": batch, "seq_len": seq_len, "next_seq_len": seq_len + 1})
 
         tensors: Tensors = dict(self.weights)
-        tensors.update({"x": x, "cache_k_in": cache_k_in, "cache_v_in": cache_v_in})
+        tensors["x"] = x
+        for i in range(self.num_layers):
+            k_in_name, v_in_name, _, _ = cache_io_names(self.num_layers, i)
+            tensors[k_in_name] = k_list[i]
+            tensors[v_in_name] = v_list[i]
         tensors = execute_graph(self.fused_graph, tensors, dims)
 
         saved = sum(
@@ -101,10 +124,20 @@ class DrakeEngine:
             if op.kind == "fused"
         )
 
+        cache_k_out: CacheArg
+        cache_v_out: CacheArg
+        if self.num_layers > 1:
+            names = [cache_io_names(self.num_layers, i) for i in range(self.num_layers)]
+            cache_k_out = [tensors[k_out] for _, _, k_out, _ in names]
+            cache_v_out = [tensors[v_out] for _, _, _, v_out in names]
+        else:
+            cache_k_out = tensors["cache_k_out"]
+            cache_v_out = tensors["cache_v_out"]
+
         return StepResult(
             output=tensors["output"],
-            cache_k_out=tensors["cache_k_out"],
-            cache_v_out=tensors["cache_v_out"],
+            cache_k_out=cache_k_out,
+            cache_v_out=cache_v_out,
             bucket=plan.bucket,
             plan=plan,
             traffic_saved_bytes=saved,

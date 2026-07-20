@@ -102,70 +102,138 @@ def make_dims(
     }
 
 
-def build_decode_step_graph() -> Graph:
-    """One decode-step, single transformer layer, as a DRAKE Graph.
+def layer_prefix(layer: int, num_layers: int) -> str:
+    """Tensor/op-name prefix for a given layer. Empty for the single-layer
+    case so ``build_decode_step_graph(num_layers=1)`` reproduces the exact
+    unprefixed tensor names every existing test and caller depends on."""
+    return f"l{layer}_" if num_layers > 1 else ""
+
+
+def cache_io_names(num_layers: int, layer: int) -> Tuple[str, str, str, str]:
+    """(cache_k_in, cache_v_in, cache_k_out, cache_v_out) tensor names for `layer`."""
+    p = layer_prefix(layer, num_layers)
+    return f"{p}cache_k_in", f"{p}cache_v_in", f"{p}cache_k_out", f"{p}cache_v_out"
+
+
+def weight_names(num_layers: int, layer: int) -> Dict[str, str]:
+    """Map logical weight name -> graph tensor name for `layer`."""
+    p = layer_prefix(layer, num_layers)
+    return {
+        "w_norm1": f"{p}w_norm1",
+        "w_qkv": f"{p}w_qkv",
+        "w_o": f"{p}w_o",
+        "w_norm2": f"{p}w_norm2",
+        "w_up": f"{p}w_up",
+        "w_down": f"{p}w_down",
+    }
+
+
+def _layer_ops(prefix: str, input_name: str, output_name: str) -> Tuple[List[Op], Dict[str, Shape]]:
+    """Build one decode-step transformer layer: rmsnorm, QKV projection, RoPE,
+    KV-cache append, attention, output projection, FFN. `input_name` /
+    `output_name` are the residual-stream tensors that connect layers; every
+    other tensor and op name is local to this layer, prefixed by `prefix`.
+    """
+
+    def n(local: str) -> str:
+        return f"{prefix}{local}" if prefix else local
+
+    shapes: Dict[str, Shape] = {
+        input_name: ("batch", "hidden_dim"),
+        n("w_norm1"): ("hidden_dim",),
+        n("x_norm"): ("batch", "hidden_dim"),
+        n("w_qkv"): ("hidden_dim", "qkv_dim"),
+        n("qkv"): ("batch", "qkv_dim"),
+        n("q"): ("batch", "n_heads", "head_dim"),
+        n("k_new"): ("batch", "n_heads", "head_dim"),
+        n("v_new"): ("batch", "n_heads", "head_dim"),
+        n("q_rot"): ("batch", "n_heads", "head_dim"),
+        n("k_rot"): ("batch", "n_heads", "head_dim"),
+        n("cache_k_in"): ("batch", "seq_len", "n_heads", "head_dim"),
+        n("cache_v_in"): ("batch", "seq_len", "n_heads", "head_dim"),
+        n("cache_k_out"): ("batch", "next_seq_len", "n_heads", "head_dim"),
+        n("cache_v_out"): ("batch", "next_seq_len", "n_heads", "head_dim"),
+        n("scores"): ("batch", "n_heads", "next_seq_len"),
+        n("probs"): ("batch", "n_heads", "next_seq_len"),
+        n("attn_out"): ("batch", "n_heads", "head_dim"),
+        n("attn_out_flat"): ("batch", "hidden_dim"),
+        n("w_o"): ("hidden_dim", "hidden_dim"),
+        n("attn_proj"): ("batch", "hidden_dim"),
+        n("resid1"): ("batch", "hidden_dim"),
+        n("w_norm2"): ("hidden_dim",),
+        n("resid1_norm"): ("batch", "hidden_dim"),
+        n("w_up"): ("hidden_dim", "ffn_dim"),
+        n("ff_hidden"): ("batch", "ffn_dim"),
+        n("ff_act"): ("batch", "ffn_dim"),
+        n("w_down"): ("ffn_dim", "hidden_dim"),
+        n("ff_out"): ("batch", "hidden_dim"),
+        output_name: ("batch", "hidden_dim"),
+    }
+
+    ops = [
+        Op(n("norm1"), "rmsnorm", [input_name, n("w_norm1")], [n("x_norm")], {"eps": 1e-6}),
+        Op(n("qkv_proj"), "matmul", [n("x_norm"), n("w_qkv")], [n("qkv")], {}),
+        Op(n("split"), "split_qkv", [n("qkv")], [n("q"), n("k_new"), n("v_new")], {}),
+        Op(n("rope"), "rope", [n("q"), n("k_new")], [n("q_rot"), n("k_rot")], {"position": "seq_len"}),
+        Op(
+            n("kv_update"),
+            "kv_cache_update",
+            [n("k_rot"), n("v_new"), n("cache_k_in"), n("cache_v_in")],
+            [n("cache_k_out"), n("cache_v_out")],
+            {},
+        ),
+        Op(n("qk"), "attn_qk", [n("q_rot"), n("cache_k_out")], [n("scores")], {}),
+        Op(n("softmax"), "attn_softmax", [n("scores")], [n("probs")], {}),
+        Op(n("av"), "attn_av", [n("probs"), n("cache_v_out")], [n("attn_out")], {}),
+        Op(n("flatten"), "reshape", [n("attn_out")], [n("attn_out_flat")], {}),
+        Op(n("o_proj"), "matmul", [n("attn_out_flat"), n("w_o")], [n("attn_proj")], {}),
+        Op(n("resid1"), "add", [input_name, n("attn_proj")], [n("resid1")], {}),
+        Op(n("norm2"), "rmsnorm", [n("resid1"), n("w_norm2")], [n("resid1_norm")], {"eps": 1e-6}),
+        Op(n("up_proj"), "matmul", [n("resid1_norm"), n("w_up")], [n("ff_hidden")], {}),
+        Op(n("act"), "gelu", [n("ff_hidden")], [n("ff_act")], {}),
+        Op(n("down_proj"), "matmul", [n("ff_act"), n("w_down")], [n("ff_out")], {}),
+        Op(n("resid2"), "add", [n("resid1"), n("ff_out")], [output_name], {}),
+    ]
+    return ops, shapes
+
+
+def build_decode_step_graph(num_layers: int = 1) -> Graph:
+    """One decode-step across `num_layers` stacked transformer layers, as a
+    DRAKE Graph. `num_layers=1` (the default) reproduces exactly the original
+    single-layer graph -- unprefixed tensor/op names, identical shapes -- so
+    every caller that predates multi-layer support is unaffected.
+
+    For `num_layers > 1`, each layer gets its own KV cache
+    (`l{i}_cache_k_in/out`, `l{i}_cache_v_in/out`) and weights
+    (`l{i}_w_*`), threaded together along the residual stream: layer i's
+    output feeds layer i+1's input, with the first layer's input named `x`
+    and the last layer's output named `output`.
 
     Shapes use symbolic dims: batch, seq_len (existing KV-cache length),
     next_seq_len (= seq_len + 1, cache length after this step's append),
     hidden_dim, n_heads, head_dim, qkv_dim, ffn_dim.
     """
-    shapes: Dict[str, Shape] = {
-        "x": ("batch", "hidden_dim"),
-        "w_norm1": ("hidden_dim",),
-        "x_norm": ("batch", "hidden_dim"),
-        "w_qkv": ("hidden_dim", "qkv_dim"),
-        "qkv": ("batch", "qkv_dim"),
-        "q": ("batch", "n_heads", "head_dim"),
-        "k_new": ("batch", "n_heads", "head_dim"),
-        "v_new": ("batch", "n_heads", "head_dim"),
-        "q_rot": ("batch", "n_heads", "head_dim"),
-        "k_rot": ("batch", "n_heads", "head_dim"),
-        "cache_k_in": ("batch", "seq_len", "n_heads", "head_dim"),
-        "cache_v_in": ("batch", "seq_len", "n_heads", "head_dim"),
-        "cache_k_out": ("batch", "next_seq_len", "n_heads", "head_dim"),
-        "cache_v_out": ("batch", "next_seq_len", "n_heads", "head_dim"),
-        "scores": ("batch", "n_heads", "next_seq_len"),
-        "probs": ("batch", "n_heads", "next_seq_len"),
-        "attn_out": ("batch", "n_heads", "head_dim"),
-        "attn_out_flat": ("batch", "hidden_dim"),
-        "w_o": ("hidden_dim", "hidden_dim"),
-        "attn_proj": ("batch", "hidden_dim"),
-        "resid1": ("batch", "hidden_dim"),
-        "w_norm2": ("hidden_dim",),
-        "resid1_norm": ("batch", "hidden_dim"),
-        "w_up": ("hidden_dim", "ffn_dim"),
-        "ff_hidden": ("batch", "ffn_dim"),
-        "ff_act": ("batch", "ffn_dim"),
-        "w_down": ("ffn_dim", "hidden_dim"),
-        "ff_out": ("batch", "hidden_dim"),
-        "output": ("batch", "hidden_dim"),
-    }
+    if num_layers < 1:
+        raise ValueError(f"num_layers must be >= 1, got {num_layers}")
 
-    ops = [
-        Op("norm1", "rmsnorm", ["x", "w_norm1"], ["x_norm"], {"eps": 1e-6}),
-        Op("qkv_proj", "matmul", ["x_norm", "w_qkv"], ["qkv"], {}),
-        Op("split", "split_qkv", ["qkv"], ["q", "k_new", "v_new"], {}),
-        Op("rope", "rope", ["q", "k_new"], ["q_rot", "k_rot"], {"position": "seq_len"}),
-        Op(
-            "kv_update",
-            "kv_cache_update",
-            ["k_rot", "v_new", "cache_k_in", "cache_v_in"],
-            ["cache_k_out", "cache_v_out"],
-            {},
-        ),
-        Op("qk", "attn_qk", ["q_rot", "cache_k_out"], ["scores"], {}),
-        Op("softmax", "attn_softmax", ["scores"], ["probs"], {}),
-        Op("av", "attn_av", ["probs", "cache_v_out"], ["attn_out"], {}),
-        Op("flatten", "reshape", ["attn_out"], ["attn_out_flat"], {}),
-        Op("o_proj", "matmul", ["attn_out_flat", "w_o"], ["attn_proj"], {}),
-        Op("resid1", "add", ["x", "attn_proj"], ["resid1"], {}),
-        Op("norm2", "rmsnorm", ["resid1", "w_norm2"], ["resid1_norm"], {"eps": 1e-6}),
-        Op("up_proj", "matmul", ["resid1_norm", "w_up"], ["ff_hidden"], {}),
-        Op("act", "gelu", ["ff_hidden"], ["ff_act"], {}),
-        Op("down_proj", "matmul", ["ff_act", "w_down"], ["ff_out"], {}),
-        Op("resid2", "add", ["resid1", "ff_out"], ["output"], {}),
-    ]
+    all_ops: List[Op] = []
+    all_shapes: Dict[str, Shape] = {}
+    graph_inputs = ["x"]
+    graph_outputs = ["output"]
 
-    graph_inputs = ["x", "cache_k_in", "cache_v_in"]
-    graph_outputs = ["output", "cache_k_out", "cache_v_out"]
-    return Graph(ops=ops, shapes=shapes, graph_inputs=graph_inputs, graph_outputs=graph_outputs)
+    layer_input = "x"
+    for i in range(num_layers):
+        prefix = layer_prefix(i, num_layers)
+        layer_output = "output" if i == num_layers - 1 else f"l{i}_output"
+        ops, shapes = _layer_ops(prefix, layer_input, layer_output)
+        all_ops.extend(ops)
+        all_shapes.update(shapes)
+
+        cache_k_in, cache_v_in, cache_k_out, cache_v_out = cache_io_names(num_layers, i)
+        graph_inputs.extend([cache_k_in, cache_v_in])
+        graph_outputs.extend([cache_k_out, cache_v_out])
+        layer_input = layer_output
+
+    return Graph(
+        ops=all_ops, shapes=all_shapes, graph_inputs=graph_inputs, graph_outputs=graph_outputs
+    )

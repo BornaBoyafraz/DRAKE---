@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import ctypes
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 from llvmlite import binding as llvm
 from llvmlite import ir
@@ -73,7 +73,7 @@ class DispatchEngine:
 
     ir_text: str
     _engine: llvm.ExecutionEngine
-    _classify_fn: ctypes.CFUNCTYPE
+    _classify_fn: Callable[[int, int], int]
 
     def classify(self, seq_len: int, batch: int) -> int:
         return self._classify_fn(seq_len, batch)

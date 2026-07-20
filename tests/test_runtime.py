@@ -79,3 +79,58 @@ def test_traffic_saved_bytes_grows_with_sequence_length():
     long = engine.step(x, np.zeros((batch, 2000, 4, 16), dtype=np.float32), np.zeros((batch, 2000, 4, 16), dtype=np.float32))
 
     assert long.traffic_saved_bytes > short.traffic_saved_bytes
+
+
+def test_multi_layer_fusion_is_semantics_preserving():
+    """Same correctness property as test_fusion_is_semantics_preserving,
+    but across a 3-layer stack: fusion must not change the answer for any
+    layer, and each layer's KV cache must update independently."""
+    num_layers = 3
+    graph = build_decode_step_graph(num_layers=num_layers)
+    fused_graph, records = FusionPass().run(graph)
+    assert len(records) == 3 * num_layers
+
+    dims = make_dims(batch=2, seq_len=9, hidden_dim=32, n_heads=4, head_dim=8, ffn_dim=64)
+    weights = init_weights(dims, seed=11, num_layers=num_layers)
+    step_inputs = init_step_inputs(dims, seed=13, num_layers=num_layers)
+    tensors_in = {**weights, **step_inputs}
+
+    unfused_out = execute_graph(graph, tensors_in, dims)
+    fused_out = execute_graph(fused_graph, tensors_in, dims)
+
+    check_names = ["output"]
+    for i in range(num_layers):
+        check_names += [f"l{i}_cache_k_out", f"l{i}_cache_v_out"]
+    for name in check_names:
+        np.testing.assert_allclose(unfused_out[name], fused_out[name], rtol=1e-6, atol=1e-6)
+
+
+def test_multi_layer_engine_runs_decode_loop_with_per_layer_caches():
+    num_layers = 3
+    engine = DrakeEngine(hidden_dim=32, n_heads=4, head_dim=8, ffn_dim=64, num_layers=num_layers)
+    batch = 2
+    cache_k = [np.zeros((batch, 0, 4, 8), dtype=np.float32) for _ in range(num_layers)]
+    cache_v = [np.zeros((batch, 0, 4, 8), dtype=np.float32) for _ in range(num_layers)]
+    rng = np.random.default_rng(0)
+
+    for step_idx in range(4):
+        x = (rng.standard_normal((batch, 32)) * 0.1).astype(np.float32)
+        result = engine.step(x, cache_k, cache_v)
+        assert result.output.shape == (batch, 32)
+        assert len(result.cache_k_out) == num_layers
+        assert len(result.cache_v_out) == num_layers
+        for k, v in zip(result.cache_k_out, result.cache_v_out):
+            assert k.shape == (batch, step_idx + 1, 4, 8)
+            assert v.shape == (batch, step_idx + 1, 4, 8)
+        cache_k, cache_v = result.cache_k_out, result.cache_v_out
+
+    # each layer's cache evolved independently -> not identical across layers
+    assert not np.allclose(cache_k[0], cache_k[1])
+
+
+def test_multi_layer_fusion_summary_scales_with_layer_count():
+    engine = DrakeEngine(hidden_dim=32, n_heads=4, head_dim=8, ffn_dim=64, num_layers=4)
+    summary = engine.fusion_summary()
+    assert summary["original_op_count"] == 16 * 4
+    assert summary["fused_op_count"] == 10 * 4
+    assert len(summary["fusions"]) == 3 * 4

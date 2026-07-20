@@ -1,10 +1,10 @@
 # DRAKE — Dynamic Runtime Adaptive Kernel Engine
 
 <p align="left">
+  <a href="https://github.com/BornaBoyafraz/drake/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/BornaBoyafraz/drake/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue.svg">
   <img alt="LLVM via llvmlite" src="https://img.shields.io/badge/codegen-LLVM%20(llvmlite)-4B8BBE.svg">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-25%20passing-2ea043.svg">
   <img alt="Status" src="https://img.shields.io/badge/status-research--grade%20prototype-orange.svg">
 </p>
 
@@ -26,25 +26,27 @@ Built as a demonstration of the specific skill intersection a **Deep Learning Co
 
 | Module | Responsibility |
 |---|---|
-| [`ir.py`](ir.py) | A graph IR scoped to one transformer decode-step layer: RMSNorm, QKV projection, RoPE, KV-cache append, attention, output projection, FFN. Shapes are symbolic (`("batch", "seq_len", "n_heads", "head_dim")`), resolved against a concrete `dims` dict at analysis/execution time. |
-| [`passes/fusion.py`](passes/fusion.py) | Pattern-based operator fusion, gated by a **connectivity check** that rejects coincidental kind-matches which aren't a real dependency chain. Includes a **KV-cache-aware fusion** — `kv_cache_update → attn_qk → attn_softmax → attn_av` collapses into one node, so the freshly written K/V for a token is consumed by attention without an intervening HBM round-trip, mirroring the idea behind FlashDecoding / paged-attention kernels. Reports savings via an analytic HBM-traffic-bytes model. |
+| [`ir.py`](ir.py) | A graph IR for `num_layers` stacked transformer decode-step layers (default 1): RMSNorm, QKV projection, RoPE, KV-cache append, attention, output projection, FFN, threaded along a residual stream. Shapes are symbolic (`("batch", "seq_len", "n_heads", "head_dim")`), resolved against a concrete `dims` dict at analysis/execution time. Each layer gets its own weights and KV cache; `num_layers=1` reproduces the original single-layer graph exactly, tensor name for tensor name. |
+| [`passes/fusion.py`](passes/fusion.py) | Two fusion-selection strategies over the same candidate patterns, both gated by a **connectivity check** that rejects coincidental kind-matches which aren't a real dependency chain: `FusionPass.run` (greedy, longest-pattern-first, no shape needed — what runs once at engine construction) and `FusionPass.run_cost_optimal` (a DP over the op sequence that provably maximizes total analytic HBM-traffic bytes saved for a concrete `dims`, rather than just taking the longest available match). Includes a **KV-cache-aware fusion** — `kv_cache_update → attn_qk → attn_softmax → attn_av` collapses into one node, so the freshly written K/V for a token is consumed by attention without an intervening HBM round-trip, mirroring the idea behind FlashDecoding / paged-attention kernels. |
 | [`passes/specialize.py`](passes/specialize.py) | Buckets `(seq_len, batch)` and selects a kernel variant per bucket, per fused op — vectorized vs. tiled attention (tile size 64/128), single-block vs. batch-blocked matmul. |
 | [`codegen/dispatch_jit.py`](codegen/dispatch_jit.py) | Compiles the bucket classifier to **real LLVM IR** via `llvmlite`, JIT-compiles it, and calls it through `ctypes`. Genuinely generated, verified, compiled, and executed — not a mock. Checked against a pure-Python reference over a dense `(seq_len, batch)` grid in [`tests/test_dispatch_jit.py`](tests/test_dispatch_jit.py). |
-| [`codegen/fused_ops.py`](codegen/fused_ops.py) | Correct NumPy reference math for every op, and a generic executor that runs a graph — fused or not — by recursing into a fused op's original sub-ops. This is what makes the correctness claim below checkable rather than asserted. |
-| [`runtime.py`](runtime.py) | `DrakeEngine`: wires profiling → LLVM dispatch → specialization (lazy, cached per bucket) → execution into a single `.step()` call per decode token. |
+| [`codegen/fused_ops.py`](codegen/fused_ops.py) | Correct NumPy reference math for every op, and a generic executor that runs a graph — fused or not, any number of layers — by recursing into a fused op's original sub-ops. This is what makes the correctness claim below checkable rather than asserted. |
+| [`runtime.py`](runtime.py) | `DrakeEngine`: wires profiling → LLVM dispatch → specialization (lazy, cached per bucket) → execution into a single `.step()` call per decode token. Takes `num_layers`; for `num_layers > 1`, `step()` takes/returns a list of per-layer KV caches instead of a single array pair. |
 
 Full design writeup — including an explicit line between what's genuinely load-bearing and what's a deliberate stand-in — is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## The one correctness property that matters
 
-Fusion is only useful if it doesn't change the answer. `tests/test_runtime.py::test_fusion_is_semantics_preserving` runs the same inputs through the original 16-op graph and the fused 10-op graph and asserts the outputs — including the updated KV cache — are numerically identical. This isn't a nice-to-have: it's the property that separates a compiler transform from a bug.
+Fusion is only useful if it doesn't change the answer. `tests/test_runtime.py::test_fusion_is_semantics_preserving` runs the same inputs through the original 16-op graph and the fused 10-op graph and asserts the outputs — including the updated KV cache — are numerically identical. The multi-layer variant, `test_multi_layer_fusion_is_semantics_preserving`, checks the same property across a 3-layer stack with independent per-layer KV caches. This isn't a nice-to-have: it's the property that separates a compiler transform from a bug.
+
+The DP fusion selector has its own correctness bar: `test_cost_optimal_beats_greedy_on_a_constructed_conflict` builds a small adversarial graph where the greedy longest-pattern-first heuristic provably picks a worse total than the DP optimum, and checks the DP selector actually finds it (8,000 bytes saved vs. greedy's 16). On DRAKE's real pattern table the two currently agree — every overlap there is a strict superset, so greedy can't lose — which `test_cost_optimal_matches_greedy_on_the_real_graph` pins down explicitly.
 
 ## See it run
 
 ```
 $ .venv/bin/python examples/decode_demo.py
 
-=== Fusion pass ===
+=== Fusion pass (single layer) ===
 original ops: 16  ->  fused ops: 10
   fused_norm_matmul_0          [fused_norm_matmul]        <- ['norm1', 'qkv_proj']
   fused_attention_kvupdate_1   [fused_attention_kvupdate] <- ['kv_update', 'qk', 'softmax', 'av']
@@ -68,21 +70,28 @@ entry:
 
 *(Analytic HBM-traffic-bytes model — see "Honest scope" below for exactly what that does and doesn't claim.)*
 
+The same run continues with an 8-layer decode loop (`original ops: 128 -> fused ops: 80`, each layer's KV cache tracked independently) and a greedy-vs-DP fusion comparison.
+
 ## Quickstart
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 
-.venv/bin/pytest -q                      # 25 tests: IR, fusion legality,
-                                          # bucket/LLVM agreement, end-to-end
-                                          # numeric equivalence
+.venv/bin/pytest -q                      # 35 tests: IR, multi-layer graphs,
+                                          # fusion legality, cost-optimal
+                                          # (DP) fusion selection, bucket/LLVM
+                                          # agreement, end-to-end numeric
+                                          # equivalence
+.venv/bin/ruff check .                   # lint
+.venv/bin/mypy --ignore-missing-imports ir.py profiler.py runtime.py passes/ codegen/
 
-.venv/bin/python examples/decode_demo.py # fusion report + LLVM IR dump
-                                          # + a growing-cache decode loop
+.venv/bin/python examples/decode_demo.py # fusion report + LLVM IR dump +
+                                          # decode loop + multi-layer demo +
+                                          # greedy-vs-DP fusion comparison
 ```
 
-No GPU, no external services, no network calls — the whole pipeline runs locally in a plain virtualenv.
+No GPU, no external services, no network calls — the whole pipeline runs locally in a plain virtualenv. The same three checks (`pytest`, `ruff`, `mypy`) run in CI on every push — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Honest scope
 
@@ -93,9 +102,10 @@ No benchmark claim in this README is dressed up as more than it is. That distinc
 ## Roadmap
 
 - [ ] Triton backend behind the same `KernelPlan` interface, for measured GPU wall-clock and achieved-bandwidth numbers
-- [ ] Cost-model-driven fusion selection (replace the greedy longest-pattern-first heuristic with one that compares candidate groupings)
-- [ ] Multi-layer graphs (currently one decode-step layer; stacking layers is a straightforward IR extension)
+- [x] Cost-model-driven fusion selection — `FusionPass.run_cost_optimal`, a DP over candidate groupings maximizing analytic traffic saved for a concrete shape
+- [x] Multi-layer graphs — `build_decode_step_graph(num_layers=N)`, independent per-layer weights and KV cache
 - [ ] Autotuning over tile size / block size instead of the fixed heuristic table in `specialize.py`
+- [ ] Make the runtime's per-bucket specialization actually invoke `run_cost_optimal` (today `DrakeEngine` always fuses once, structurally, at construction — the DP selector is available and tested but not yet wired into the lazy per-bucket path, since concrete `dims` aren't known until the first `.step()` call for a shape)
 
 ## Author
 
