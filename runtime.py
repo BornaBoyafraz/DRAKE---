@@ -28,6 +28,7 @@ from passes.specialize import (
     SpecializationPass,
     build_bucket_table,
 )
+from passes.verify import verify_graph
 from profiler import ShapeProfiler
 
 CacheArg = Union[np.ndarray, List[np.ndarray]]
@@ -62,7 +63,10 @@ class DrakeEngine:
     ) -> None:
         self.num_layers = num_layers
         self.base_graph = graph if graph is not None else build_decode_step_graph(num_layers)
+        verify_graph(self.base_graph)
         self.fused_graph, self.fusion_records = FusionPass().run(self.base_graph)
+        # Fusion must preserve every structural invariant; verify it did.
+        verify_graph(self.fused_graph)
 
         self.seq_boundaries = tuple(seq_boundaries)
         self.batch_boundaries = tuple(batch_boundaries)
