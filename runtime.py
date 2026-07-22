@@ -19,6 +19,7 @@ import numpy as np
 from codegen.dispatch_jit import DispatchEngine, compile_dispatch_engine
 from codegen.fused_ops import Tensors, execute_graph, init_weights
 from ir import Graph, build_decode_step_graph, cache_io_names
+from passes.dce import eliminate_dead_code
 from passes.fusion import FusionPass, traffic_saved_bytes
 from passes.specialize import (
     DEFAULT_BATCH_BOUNDARIES,
@@ -66,6 +67,11 @@ class DrakeEngine:
         verify_graph(self.base_graph)
         self.fused_graph, self.fusion_records = FusionPass().run(self.base_graph)
         # Fusion must preserve every structural invariant; verify it did.
+        verify_graph(self.fused_graph)
+        # Clean up any ops fusion left with no live consumers, then re-verify.
+        # A no-op on today's graph, but it makes the pipeline correct-by-
+        # construction for future passes that introduce dead nodes.
+        self.fused_graph, self.dce_removed = eliminate_dead_code(self.fused_graph)
         verify_graph(self.fused_graph)
 
         self.seq_boundaries = tuple(seq_boundaries)

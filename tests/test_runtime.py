@@ -1,7 +1,7 @@
 import numpy as np
 
 from codegen.fused_ops import execute_graph, init_step_inputs, init_weights
-from ir import build_decode_step_graph, make_dims
+from ir import Graph, Op, build_decode_step_graph, make_dims
 from passes.fusion import FusionPass
 from runtime import DrakeEngine
 
@@ -134,3 +134,43 @@ def test_multi_layer_fusion_summary_scales_with_layer_count():
     assert summary["original_op_count"] == 16 * 4
     assert summary["fused_op_count"] == 10 * 4
     assert len(summary["fusions"]) == 3 * 4
+
+
+def test_engine_runs_dce_in_its_pipeline():
+    """DCE is part of the build pipeline now. On the real graph nothing is
+    dead, so it removes nothing -- but the engine must expose that it ran,
+    and the graph it runs must still produce correct results."""
+    engine = DrakeEngine(hidden_dim=64, n_heads=4, head_dim=16, ffn_dim=256)
+    assert engine.dce_removed == []  # real graph has no dead ops
+
+    batch = 2
+    cache_k = np.zeros((batch, 3, 4, 16), dtype=np.float32)
+    cache_v = np.zeros((batch, 3, 4, 16), dtype=np.float32)
+    x = np.zeros((batch, 64), dtype=np.float32)
+    result = engine.step(x, cache_k, cache_v)
+    assert result.output.shape == (batch, 64)
+
+
+def test_engine_pipeline_dce_removes_a_dead_op_from_a_custom_graph():
+    """Feed the engine a base graph with a genuinely dead op and confirm the
+    pipeline's DCE strips it, while the decode step still produces the
+    correct output shape."""
+    base = build_decode_step_graph()
+    dead = Op("dead_scratch", "gelu", ["output"], ["scratch"], {})
+    shapes = dict(base.shapes)
+    shapes["scratch"] = shapes["output"]
+    dirty = Graph(
+        ops=base.ops + [dead],
+        shapes=shapes,
+        graph_inputs=list(base.graph_inputs),
+        graph_outputs=list(base.graph_outputs),
+    )
+
+    engine = DrakeEngine(hidden_dim=64, n_heads=4, head_dim=16, ffn_dim=256, graph=dirty)
+    assert "dead_scratch" in engine.dce_removed
+    assert all(op.name != "dead_scratch" for op in engine.fused_graph.ops)
+
+    batch = 1
+    x = np.zeros((batch, 64), dtype=np.float32)
+    result = engine.step(x, np.zeros((batch, 2, 4, 16), dtype=np.float32), np.zeros((batch, 2, 4, 16), dtype=np.float32))
+    assert result.output.shape == (batch, 64)
