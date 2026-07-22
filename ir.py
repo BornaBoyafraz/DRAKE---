@@ -72,6 +72,76 @@ class Graph:
     def bytes_of(self, tensor: str, dims: Dims) -> int:
         return num_elements(self.shapes[tensor], dims) * self.dtype_bytes
 
+    def to_dot(self, dims: Dims | None = None) -> str:
+        """Return a deterministic Graphviz DOT rendering of the graph."""
+
+        def quote(value: str) -> str:
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            return f'"{escaped}"'
+
+        def edge_label(tensor: str) -> str:
+            if dims is None:
+                return tensor
+            shape = resolve_shape(self.shapes[tensor], dims)
+            elements = num_elements(self.shapes[tensor], dims)
+            return f"{tensor}\nshape={shape}\nelements={elements}"
+
+        lines = ['digraph DRAKE {', '  rankdir="LR";']
+        input_nodes = {tensor: f"input_{i}" for i, tensor in enumerate(self.graph_inputs)}
+        output_nodes = {tensor: f"output_{i}" for i, tensor in enumerate(self.graph_outputs)}
+        op_nodes = [f"op_{i}" for i in range(len(self.ops))]
+
+        for tensor in self.graph_inputs:
+            label = quote(f"input\n{tensor}")
+            lines.append(
+                f'  {input_nodes[tensor]} [shape="ellipse", style="filled", '
+                f'fillcolor="#dbeafe", label={label}];'
+            )
+
+        for i, op in enumerate(self.ops):
+            label_parts = [op.name, op.kind]
+            if op.kind == "fused":
+                fused_kind = str(op.attrs.get("fused_kind", ""))
+                sub_op_kinds = [sub_op.kind for sub_op in op.attrs.get("sub_ops", [])]
+                label_parts.extend(
+                    [f"fused_kind: {fused_kind}", f"sub-ops: {' -> '.join(sub_op_kinds)}"]
+                )
+                style = 'style="filled", fillcolor="#fde68a", color="#b45309", '
+            else:
+                style = ""
+            label = quote("\n".join(label_parts))
+            lines.append(
+                f'  {op_nodes[i]} [shape="box", {style}label={label}];'
+            )
+
+        for tensor in self.graph_outputs:
+            label = quote(f"output\n{tensor}")
+            lines.append(
+                f'  {output_nodes[tensor]} [shape="ellipse", style="filled", '
+                f'fillcolor="#dcfce7", label={label}];'
+            )
+
+        producer_nodes = {
+            tensor: op_nodes[i] for i, op in enumerate(self.ops) for tensor in op.outputs
+        }
+        for i, op in enumerate(self.ops):
+            target = op_nodes[i]
+            for tensor in op.inputs:
+                source = producer_nodes.get(tensor, input_nodes.get(tensor))
+                if source is not None:
+                    lines.append(f"  {source} -> {target} [label={quote(edge_label(tensor))}];")
+
+        for tensor in self.graph_outputs:
+            source = producer_nodes.get(tensor, input_nodes.get(tensor))
+            if source is not None:
+                lines.append(
+                    f"  {source} -> {output_nodes[tensor]} "
+                    f"[label={quote(edge_label(tensor))}];"
+                )
+
+        lines.append("}")
+        return "\n".join(lines)
+
     def dump(self) -> str:
         lines = [f"graph({', '.join(self.graph_inputs)}) -> ({', '.join(self.graph_outputs)}) {{"]
         for op in self.ops:
