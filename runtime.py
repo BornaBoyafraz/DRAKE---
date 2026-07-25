@@ -19,6 +19,7 @@ import numpy as np
 from codegen.dispatch_jit import DispatchEngine, compile_dispatch_engine
 from codegen.fused_ops import Tensors, execute_graph, init_weights
 from ir import Graph, build_decode_step_graph, cache_io_names
+from passes.cse import eliminate_common_subexpressions
 from passes.dce import eliminate_dead_code
 from passes.fusion import FusionPass, traffic_saved_bytes
 from passes.specialize import (
@@ -72,6 +73,8 @@ class DrakeEngine:
         # A no-op on today's graph, but it makes the pipeline correct-by-
         # construction for future passes that introduce dead nodes.
         self.fused_graph, self.dce_removed = eliminate_dead_code(self.fused_graph)
+        verify_graph(self.fused_graph)
+        self.fused_graph, self.cse_removed = eliminate_common_subexpressions(self.fused_graph)
         verify_graph(self.fused_graph)
 
         self.seq_boundaries = tuple(seq_boundaries)

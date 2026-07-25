@@ -151,6 +151,19 @@ def test_engine_runs_dce_in_its_pipeline():
     assert result.output.shape == (batch, 64)
 
 
+def test_engine_runs_cse_in_its_pipeline():
+    """CSE runs after DCE and preserves execution on the real graph."""
+    engine = DrakeEngine(hidden_dim=64, n_heads=4, head_dim=16, ffn_dim=256)
+    assert engine.cse_removed == []
+
+    batch = 2
+    cache_k = np.zeros((batch, 3, 4, 16), dtype=np.float32)
+    cache_v = np.zeros((batch, 3, 4, 16), dtype=np.float32)
+    x = np.zeros((batch, 64), dtype=np.float32)
+    result = engine.step(x, cache_k, cache_v)
+    assert result.output.shape == (batch, 64)
+
+
 def test_engine_pipeline_dce_removes_a_dead_op_from_a_custom_graph():
     """Feed the engine a base graph with a genuinely dead op and confirm the
     pipeline's DCE strips it, while the decode step still produces the
