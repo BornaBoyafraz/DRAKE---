@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DRAKE — Dynamic Runtime Adaptive Kernel Engine</title>
+<meta name="description" content="A from-scratch deep-learning compiler for LLM decode inference: shape-specialized operator fusion with the kernel-dispatch decision compiled to real LLVM IR and JIT-executed.">
+<style>
+  :root{
+    --bg:#0b1120; --bg2:#0f172a; --panel:#111c33; --panel2:#16233f;
+    --line:#1e2c48; --text:#e6edf7; --muted:#93a4c0; --dim:#64748b;
+    --green:#22c55e; --green2:#16a34a; --cyan:#38bdf8; --amber:#fbbf24; --violet:#a78bfa;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --maxw:1080px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;
+  }
+  a{color:var(--cyan);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono)}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  section{padding:72px 0;border-top:1px solid var(--line)}
+  h2{font-size:clamp(1.5rem,3.5vw,2.1rem);margin:0 0 8px;letter-spacing:-.02em}
+  h3{margin:0 0 6px;font-size:1.05rem}
+  .eyebrow{font-family:var(--mono);font-size:.78rem;letter-spacing:.18em;text-transform:uppercase;color:var(--green);margin:0 0 14px}
+  .lead{color:var(--muted);font-size:1.06rem;max-width:64ch}
+
+  /* Nav */
+  nav{position:sticky;top:0;z-index:50;background:rgba(11,17,32,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .navrow{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:700;letter-spacing:.04em}
+  .brand .dot{width:11px;height:11px;border-radius:50%;background:var(--green);box-shadow:0 0 14px 2px rgba(34,197,94,.6)}
+  .navlinks{display:flex;gap:22px;font-size:.9rem}
+  .navlinks a{color:var(--muted)}
+  .navlinks a:hover{color:var(--text);text-decoration:none}
+  @media(max-width:680px){.navlinks{display:none}}
+
+  /* Hero */
+  .hero{position:relative;padding:96px 0 84px;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;
+    background:radial-gradient(60% 55% at 50% -8%,rgba(34,197,94,.16),transparent 60%),
+               radial-gradient(45% 40% at 88% 8%,rgba(56,189,248,.12),transparent 60%);pointer-events:none}
+  .grid-bg{position:absolute;inset:0;opacity:.35;pointer-events:none;
+    background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:44px 44px;mask-image:radial-gradient(70% 60% at 50% 10%,#000,transparent 75%)}
+  .hero .wrap{position:relative}
+  .tag{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.76rem;letter-spacing:.1em;color:var(--muted);
+    border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 12px;margin-bottom:22px}
+  .tag .pulse{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  h1{font-size:clamp(2.4rem,6vw,4rem);line-height:1.03;margin:0 0 18px;letter-spacing:-.03em;font-weight:800}
+  h1 .g{background:linear-gradient(120deg,#fff,#7dd3fc 55%,var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:clamp(1.02rem,2.4vw,1.28rem);color:var(--muted);max-width:60ch;margin:0 0 30px}
+  .sub b{color:var(--text);font-weight:600}
+  .cta{display:flex;gap:14px;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;gap:9px;font-weight:600;font-size:.95rem;padding:12px 20px;border-radius:10px;border:1px solid transparent;cursor:pointer;transition:transform .15s,background .15s,border-color .15s}
+  .btn:hover{transform:translateY(-1px);text-decoration:none}
+  .btn-primary{background:var(--green);color:#04120a}
+  .btn-primary:hover{background:#2ee06a}
+  .btn-ghost{background:var(--panel);border-color:var(--line);color:var(--text)}
+  .btn-ghost:hover{border-color:var(--green);color:#fff}
+  .badges{display:flex;gap:10px;flex-wrap:wrap;margin-top:30px}
+  .badge{font-family:var(--mono);font-size:.74rem;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:5px 10px;background:rgba(17,28,51,.6)}
+  .badge b{color:var(--green);font-weight:700}
+
+  /* Generic panels & grid */
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .g3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media(max-width:820px){.g2,.g3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;transition:border-color .15s,transform .15s,background .15s}
+  .card:hover{border-color:#2b4066;transform:translateY(-2px);background:var(--panel2)}
+  .card .k{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--green);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .card p{color:var(--muted);margin:.4rem 0 0;font-size:.95rem}
+  .ico{width:22px;height:22px;flex:none;stroke:var(--green);fill:none;stroke-width:1.7}
+
+  /* Problem/approach two-col */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start}
+  @media(max-width:820px){.split{grid-template-columns:1fr}}
+  .note{border-left:3px solid var(--green);padding:4px 0 4px 16px;color:var(--muted)}
+  .x{color:#fb7185;font-weight:600}
+  .ok{color:var(--green);font-weight:600}
+
+  /* Pipeline */
+  .pipe{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin-top:26px}
+  .stage{flex:1 1 150px;min-width:150px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;position:relative;margin:8px}
+  .stage .n{font-family:var(--mono);font-size:.7rem;color:var(--dim)}
+  .stage .t{font-weight:700;margin:6px 0 4px}
+  .stage .d{font-size:.82rem;color:var(--muted)}
+  .stage.hl{border-color:rgba(34,197,94,.5);box-shadow:0 0 0 1px rgba(34,197,94,.15)}
+
+  /* Code block */
+  .code{background:#08101f;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:8px}
+  .code .bar{display:flex;gap:7px;padding:11px 14px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.02)}
+  .code .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .code pre{margin:0;padding:16px 18px;overflow-x:auto;font-family:var(--mono);font-size:.83rem;line-height:1.7;color:#cbd5e1}
+  .code .cm{color:var(--dim)}.code .gn{color:var(--green)}.code .cy{color:var(--cyan)}.code .am{color:var(--amber)}
+
+  /* Table */
+  .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin-top:18px}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:520px}
+  th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line)}
+  th{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:rgba(255,255,255,.02)}
+  td.mono{font-family:var(--mono);color:var(--cyan)}
+  tr:last-child td{border-bottom:none}
+  .right{text-align:right}
+
+  /* Stats */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:8px}
+  @media(max-width:820px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;text-align:center}
+  .stat .v{font-family:var(--mono);font-size:1.9rem;font-weight:700;color:#fff;letter-spacing:-.02em}
+  .stat .l{font-size:.8rem;color:var(--muted);margin-top:4px}
+
+  .scope{background:linear-gradient(180deg,var(--panel),rgba(17,28,51,.4));border:1px solid var(--line);border-radius:14px;padding:26px}
+  .scope .lead{margin-top:8px}
+
+  footer{border-top:1px solid var(--line);padding:40px 0 60px;color:var(--dim)}
+  .frow{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
+  .frow .mono{color:var(--muted);font-size:.85rem}
+  .disclaimer{font-size:.78rem;color:var(--dim);margin-top:18px;max-width:70ch}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap navrow">
+    <div class="brand"><span class="dot"></span>DRAKE</div>
+    <div class="navlinks">
+      <a href="#problem">Problem</a>
+      <a href="#approach">Approach</a>
+      <a href="#passes">Passes</a>
+      <a href="#run">Run it</a>
+      <a href="#scope">Honest scope</a>
+      <a href="https://github.com/BornaBoyafraz/DRAKE---">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="grid-bg"></div>
+  <div class="wrap">
+    <span class="tag"><span class="pulse"></span>Deep-learning compiler · LLM decode inference</span>
+    <h1>DRAKE<br><span class="g">Dynamic Runtime Adaptive Kernel Engine</span></h1>
+    <p class="sub">A from-scratch compiler for LLM decode inference: <b>shape-specialized operator fusion</b> where the kernel-dispatch decision is compiled to <b>real LLVM IR</b> and JIT-executed — profiling the shapes a workload actually visits instead of committing to one schedule ahead of time.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/BornaBoyafraz/DRAKE---">
+        <svg class="ico" viewBox="0 0 24 24" style="stroke:#04120a"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5a4 4 0 0 1 1-2.7c-.1-.3-.5-1.3.1-2.7 0 0 .8-.3 2.7 1a9.3 9.3 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .6 1.4.2 2.4.1 2.7a4 4 0 0 1 1 2.7c0 3.9-2.4 4.7-4.6 5 .3.3.6.9.6 1.8v2.7c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg>
+        View on GitHub
+      </a>
+      <a class="btn btn-ghost" href="#approach">How it works ↓</a>
+    </div>
+    <div class="badges">
+      <span class="badge"><b>68</b> tests passing</span>
+      <span class="badge">LLVM via <b>llvmlite</b></span>
+      <span class="badge">CI: pytest · ruff · mypy</span>
+      <span class="badge"><b>MIT</b> licensed</span>
+      <span class="badge">numpy · <b>zero GPU required</b></span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- PROBLEM -->
+<section id="problem">
+  <div class="wrap">
+    <p class="eyebrow">The problem</p>
+    <h2>Decode breaks the one-schedule assumption</h2>
+    <p class="lead">Ahead-of-time inference compilers — TVM, XLA, TensorRT, <code>torch.compile</code> — pick one fusion plan and one kernel schedule per shape, decided once at compile time. That's fine for vision models with fixed input sizes.</p>
+    <div class="split" style="margin-top:28px">
+      <div class="card">
+        <div class="k">Autoregressive decode</div>
+        <p>Every token, the same graph runs again with a <b style="color:var(--text)">seq_len</b> — and a KV cache — one step larger. A server spends its <em>whole life</em> sliding along that curve, never sitting at one point.</p>
+      </div>
+      <div class="card">
+        <div class="k">Why one schedule loses</div>
+        <p>The plan that's optimal at token 16 — everything register-resident, no tiling — is <span class="x">not</span> the plan you want at token 8,000, which must tile against shared memory / L2.</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:26px"><span class="ok">DRAKE's premise:</span> don't pick one schedule. Profile the shapes you actually see, bucket them, and fuse + specialize lazily — per bucket, the first time each is hit.</p>
+  </div>
+</section>
+
+<!-- APPROACH -->
+<section id="approach">
+  <div class="wrap">
+    <p class="eyebrow">The approach</p>
+    <h2>Profile → bucket → specialize → JIT-dispatch</h2>
+    <p class="lead">One decode step flows through a real compiler pipeline. The bucket-classification decision that gates every kernel is itself compiled to native code, so it doesn't cost an interpreted branch on the per-token hot path.</p>
+    <div class="pipe">
+      <div class="stage"><div class="n">01 · ir.py</div><div class="t">Graph IR</div><div class="d">N stacked decode-step layers; symbolic shapes.</div></div>
+      <div class="stage"><div class="n">02 · passes/fusion.py</div><div class="t">Fusion</div><div class="d">Greedy + cost-optimal DP. KV-cache-aware.</div></div>
+      <div class="stage hl"><div class="n">03 · codegen/dispatch_jit.py</div><div class="t">LLVM JIT</div><div class="d">Bucket classifier → real LLVM IR → native.</div></div>
+      <div class="stage"><div class="n">04 · passes/specialize.py</div><div class="t">Specialize</div><div class="d">Kernel variant per bucket, per fused op.</div></div>
+      <div class="stage"><div class="n">05 · codegen/fused_ops.py</div><div class="t">Execute</div><div class="d">numpy reference — proves correctness.</div></div>
+    </div>
+
+    <div class="g2" style="margin-top:30px">
+      <div>
+        <h3>KV-cache-aware fusion</h3>
+        <p class="lead" style="font-size:.98rem">The one novel pattern collapses <code>kv_cache_update → attn_qk → attn_softmax → attn_av</code> into a single node, so the freshly written K/V for a token is consumed by attention without an intervening HBM round-trip — the same idea behind FlashDecoding and paged-attention kernels.</p>
+      </div>
+      <div class="code">
+        <div class="bar"><i style="background:#fb7185"></i><i style="background:#fbbf24"></i><i style="background:#22c55e"></i></div>
+<pre><span class="cm">; the dispatch decision, compiled to LLVM IR</span>
+<span class="cy">define</span> i32 <span class="gn">@drake_dispatch</span>(i32 %seq_len, i32 %batch) {
+entry:
+  %.4 = <span class="am">icmp sge</span> i32 %seq_len, 128
+  %.5 = zext i1 %.4 to i32
+  %.7 = <span class="am">icmp sge</span> i32 %seq_len, 1024
+  ...
+  <span class="cy">ret</span> i32 %bucket_id
+}</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PASSES -->
+<section id="passes">
+  <div class="wrap">
+    <p class="eyebrow">What's inside</p>
+    <h2>A real pass pipeline</h2>
+    <p class="lead">Each piece is independently tested — not a mock. Fusion, DCE and CSE are all proven semantics-preserving against the numpy executor.</p>
+    <div class="g3" style="margin-top:26px">
+      <div class="card"><div class="k">Operator fusion</div><h3>Greedy + cost-optimal DP</h3><p>Longest-pattern-first for construction, plus a DP that provably maximizes analytic HBM-traffic saved for a concrete shape.</p></div>
+      <div class="card"><div class="k">LLVM codegen</div><h3>JIT dispatch</h3><p>Bucket classifier lowered to LLVM IR via llvmlite, JIT-compiled, called through ctypes. Verified against a Python reference over a dense grid.</p></div>
+      <div class="card"><div class="k">Specialization</div><h3>Shape buckets</h3><p>Buckets (seq_len, batch) and picks a kernel variant per fused op — vector vs. tiled attention, tile size, batch blocking.</p></div>
+      <div class="card"><div class="k">Analysis</div><h3>IR verifier</h3><p>Single-assignment, def-before-use, output reachability, parameters vs. dangling refs — the safety net every other pass relies on.</p></div>
+      <div class="card"><div class="k">Cleanup</div><h3>DCE + CSE</h3><p>Dead-code elimination and common-subexpression elimination, both wired into the engine build and re-verified after they run.</p></div>
+      <div class="card"><div class="k">Scale &amp; tooling</div><h3>Multi-layer + DOT</h3><p>Stack N transformer layers with independent KV caches; export any graph to Graphviz with <code>Graph.to_dot()</code>.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- NUMBERS -->
+<section id="numbers">
+  <div class="wrap">
+    <p class="eyebrow">What it reports</p>
+    <h2>Analytic traffic saved, per bucket</h2>
+    <p class="lead">As the KV cache grows the workload crosses bucket boundaries, the specializer swaps the attention variant, and the analytic HBM-traffic model grows accordingly.</p>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>seq_len</th><th>bucket</th><th>attention variant</th><th class="right">traffic saved</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">1</td><td class="mono">seq[0,128)</td><td>vector</td><td class="right mono">56.5 KiB</td></tr>
+          <tr><td class="mono">130</td><td class="mono">seq[128,1024)</td><td>tiled · 64</td><td class="right mono">1,153 KiB</td></tr>
+          <tr><td class="mono">1,025</td><td class="mono">seq[1024,∞)</td><td>tiled · 128</td><td class="right mono">8,760 KiB</td></tr>
+          <tr><td class="mono">2,048</td><td class="mono">seq[1024,∞)</td><td>tiled · 128</td><td class="right mono">17,456 KiB</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="stats" style="margin-top:22px">
+      <div class="stat"><div class="v">16→10</div><div class="l">ops fused / layer</div></div>
+      <div class="stat"><div class="v">68</div><div class="l">tests, all green</div></div>
+      <div class="stat"><div class="v">6</div><div class="l">compiler passes</div></div>
+      <div class="stat"><div class="v">0</div><div class="l">GPUs required</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- RUN -->
+<section id="run">
+  <div class="wrap">
+    <p class="eyebrow">Try it</p>
+    <h2>Runs locally in a plain virtualenv</h2>
+    <p class="lead">No GPU, no external services, no network calls — the whole pipeline is self-contained.</p>
+    <div class="code" style="margin-top:22px">
+      <div class="bar"><i style="background:#fb7185"></i><i style="background:#fbbf24"></i><i style="background:#22c55e"></i></div>
+<pre><span class="cm"># clone &amp; set up</span>
+git clone https://github.com/BornaBoyafraz/DRAKE---.git
+python3 -m venv .venv && .venv/bin/pip install -e <span class="gn">".[dev]"</span>
+
+<span class="cm"># quality gate — tests, lint, types</span>
+.venv/bin/pytest -q          <span class="cm"># 68 tests</span>
+.venv/bin/ruff check .
+.venv/bin/mypy --ignore-missing-imports ir.py runtime.py passes/ codegen/
+
+<span class="cm"># see the fusion report, LLVM IR dump &amp; a growing-cache decode loop</span>
+.venv/bin/python examples/decode_demo.py</pre>
+    </div>
+  </div>
+</section>
+
+<!-- SCOPE -->
+<section id="scope">
+  <div class="wrap">
+    <p class="eyebrow">Honest scope</p>
+    <h2>What's real, and what's a stand-in</h2>
+    <div class="scope">
+      <p class="lead"><span class="ok">Real and load-bearing:</span> the IR, the fusion legality &amp; connectivity check, the analytic traffic cost model, the shape-bucket specializer, and the LLVM codegen — genuinely generated, verified, JIT-compiled, and executed. Not a mock.</p>
+      <p class="lead" style="margin-top:14px"><span style="color:var(--amber);font-weight:600">Stand-in, by design:</span> the execution backend runs on numpy/CPU so the pipeline runs end-to-end without a GPU. It validates <b>correctness</b> — fusion never changes results — <em>not</em> GPU wall-clock, since CPU/numpy has no HBM-bandwidth bottleneck to relieve. Swapping it for a Triton or CUTLASS backend, without touching the IR or passes, is the natural next step toward measured GPU numbers.</p>
+      <p class="lead" style="margin-top:14px;color:var(--dim)">No claim here is dressed up as more than it is. That distinction is deliberate.</p>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="frow">
+      <div>
+        <div class="brand" style="margin-bottom:8px"><span class="dot"></span>DRAKE</div>
+        <div class="mono">Dynamic Runtime Adaptive Kernel Engine</div>
+      </div>
+      <div class="mono" style="text-align:right">
+        <div>Seyedborna Boyafraz <span style="color:var(--dim)">(Borna Afraz)</span></div>
+        <div><a href="https://github.com/BornaBoyafraz/DRAKE---">github.com/BornaBoyafraz/DRAKE---</a> · MIT</div>
+      </div>
+    </div>
+    <p class="disclaimer">A portfolio-grade prototype demonstrating deep-learning-compiler techniques — compiler passes over a real workload's IR, LLVM as an actual codegen target, and profiling-driven specialization — applied to the part of LLM inference that ahead-of-time compilers systematically under-serve.</p>
+  </div>
+</footer>
+
+</body>
+</html>

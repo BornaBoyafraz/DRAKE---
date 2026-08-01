@@ -10,6 +10,8 @@
 
 **Shape-specialized operator fusion for LLM decode inference, with the kernel-dispatch decision compiled to real LLVM IR and JIT-executed.**
 
+> 🌐 **Project site:** a self-contained landing page explaining the problem, the pipeline, and the passes lives at [`docs/index.html`](docs/index.html) — enable GitHub Pages (Settings → Pages → *Deploy from branch* → `main` / `/docs`) to publish it.
+
 Ahead-of-time inference compilers — TVM, XLA, TensorRT, `torch.compile` — commit to one fusion plan and one kernel schedule per shape, decided once at compile time. That assumption holds for vision models with fixed input sizes. It breaks for autoregressive LLM decoding, where `seq_len` (and the KV cache riding along with it) grows by one token on *every single call*, and a production server spends its entire life sliding along that curve rather than sitting at one point on it. The schedule that's optimal at token 16 — everything register-resident, no tiling needed — is not the schedule you want at token 8,000.
 
 DRAKE's premise: don't pick one schedule. Profile the shapes a workload actually visits, bucket them, and lazily fuse + specialize a kernel plan the first time each bucket is hit — then compile the bucket-classification logic itself down to native code via LLVM, so that decision doesn't cost an interpreted Python branch on every token of every request.
