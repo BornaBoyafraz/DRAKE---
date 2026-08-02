@@ -64,14 +64,13 @@ when patterns overlap:
 - `FusionPass.run_cost_optimal` — a backward DP over op positions
   (`best[i] = max(skip ops[i], take the best matching pattern at i + best[i
   + match_len])`), which provably selects the set of non-overlapping matches
-  maximizing *total* traffic saved for one concrete `dims`. On DRAKE's actual
-  pattern table this always agrees with greedy, because every overlap here
-  happens to be a strict superset (the 3-op `rmsnorm+matmul+gelu` group
-  strictly extends the 2-op `rmsnorm+matmul` group, so taking the longer one
-  is never worse). `tests/test_fusion.py::test_cost_optimal_beats_greedy_on_a_constructed_conflict`
-  builds a synthetic pattern table where a shorter match scores higher than a
-  longer, overlapping one, and checks the DP selector finds it while greedy
-  provably doesn't — that's the general case this formulation is for.
+  maximizing *total* traffic saved for one concrete `dims`. DRAKE's real graph
+  contains competing matches: the greedy scan takes an earlier
+  `add+rmsnorm` pair, while the DP can skip it for the overlapping
+  `rmsnorm+matmul+gelu` group when the latter saves more traffic.
+  `tests/test_fusion.py::test_cost_optimal_outscores_greedy_on_the_real_graph`
+  checks that choice, while `test_cost_optimal_beats_greedy_on_a_constructed_conflict`
+  exercises a larger synthetic cost difference.
 
 Savings are computed analytically by `traffic_saved_bytes` (thin wrapper
 around the shared `_group_traffic_saved` used by both selectors above): for

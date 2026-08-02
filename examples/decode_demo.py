@@ -93,10 +93,8 @@ def cost_optimal_fusion_demo() -> None:
     print(f"greedy (longest-pattern-first): {len(greedy_records)} groups, {greedy_total / 1024:.1f} KiB saved")
     print(f"DP (cost-optimal):              {len(dp_records)} groups, {dp_total / 1024:.1f} KiB saved")
     print(
-        "-> identical here: every pattern overlap in DRAKE's table is a strict"
-        " superset, so greedy can't lose. tests/test_fusion.py::"
-        "test_cost_optimal_beats_greedy_on_a_constructed_conflict proves the DP"
-        " formulation actually matters once patterns genuinely compete."
+        "-> DP wins here: greedy takes the earlier add+rmsnorm pair, while the"
+        " cost model prefers the overlapping rmsnorm+matmul+gelu group."
     )
 
 

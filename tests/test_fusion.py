@@ -12,15 +12,22 @@ def test_fusion_reduces_node_count():
     graph, fused_graph, records = _fused()
     assert len(graph.ops) == 16
     assert len(fused_graph.ops) == 10
-    assert len(records) == 3
+    assert len(records) == 4
 
 
 def test_expected_fusion_groups_present():
     _, fused_graph, records = _fused()
     kinds = {r.fused_kind for r in records}
-    assert kinds == {"fused_norm_matmul", "fused_attention_kvupdate", "fused_norm_matmul_gelu"}
+    assert kinds == {
+        "fused_norm_matmul",
+        "fused_attention_kvupdate",
+        "fused_add_rmsnorm",
+        "fused_matmul_gelu",
+    }
     kv_record = next(r for r in records if r.fused_kind == "fused_attention_kvupdate")
     assert kv_record.sub_op_names == ["kv_update", "qk", "softmax", "av"]
+    add_norm_record = next(r for r in records if r.fused_kind == "fused_add_rmsnorm")
+    assert add_norm_record.sub_op_names == ["resid1", "norm2"]
 
 
 def test_unfused_ops_remain_between_fusion_groups():
@@ -36,8 +43,8 @@ def test_unfused_ops_remain_between_fusion_groups():
         "fused_attention_kvupdate",
         "reshape",
         "matmul",
-        "add",
-        "fused_norm_matmul_gelu",
+        "fused_add_rmsnorm",
+        "fused_matmul_gelu",
         "matmul",
         "add",
     ]
@@ -77,22 +84,21 @@ def test_no_fusion_across_a_shared_intermediate_that_leaves_the_pattern():
     assert "av" in kv_record.sub_op_names
 
 
-def test_cost_optimal_matches_greedy_on_the_real_graph():
-    """On DRAKE's actual pattern table, every overlap is a strict
-    superset (the 3-op norm+matmul+gelu group is a strict extension of the
-    2-op norm+matmul group, so it can never score lower). Greedy and the DP
-    selector should therefore agree exactly here -- this is what makes
-    greedy a defensible default rather than a shortcut."""
+def test_cost_optimal_outscores_greedy_on_the_real_graph():
+    """The add+rmsnorm match starts one op before an overlapping
+    rmsnorm+matmul+gelu match. Greedy takes that earlier opportunity, while
+    the DP chooses the later group because it saves more traffic."""
     graph = build_decode_step_graph()
     dims = make_dims(batch=4, seq_len=200, hidden_dim=256, n_heads=8, head_dim=32, ffn_dim=1024)
 
     greedy_graph, greedy_records = FusionPass().run(graph)
     dp_graph, dp_records = FusionPass().run_cost_optimal(graph, dims)
 
-    assert [r.fused_kind for r in greedy_records] == [r.fused_kind for r in dp_records]
+    assert "fused_add_rmsnorm" in [r.fused_kind for r in greedy_records]
+    assert "fused_norm_matmul_gelu" in [r.fused_kind for r in dp_records]
     greedy_total = sum(traffic_saved_bytes(op, graph, dims) for op in greedy_graph.ops)
     dp_total = sum(traffic_saved_bytes(op, graph, dims) for op in dp_graph.ops)
-    assert greedy_total == dp_total
+    assert dp_total > greedy_total
 
 
 def _adversarial_conflict_graph() -> Graph:

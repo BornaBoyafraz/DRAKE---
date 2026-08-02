@@ -11,10 +11,10 @@ Two selection strategies over the same candidate patterns:
   best grouping for one specific deployment shape, not just "take the
   longest match you can". See ``tests/test_fusion.py`` for a constructed
   case where greedy is measurably suboptimal and the DP finds the true
-  optimum -- on DRAKE's actual patterns/graph the two currently agree
-  (every overlap here happens to be a strict superset, where longer never
-  scores worse), but that's a property of this specific pattern table, not
-  of greedy selection in general.
+  optimum. DRAKE's ``add -> rmsnorm`` and ``rmsnorm -> matmul -> gelu``
+  patterns overlap on the real graph: the greedy scan takes the earlier
+  two-op match, while the DP can choose the later three-op match when it
+  saves more traffic.
 
 The KV-cache-aware pattern -- ``kv_cache_update -> attn_qk -> attn_softmax ->
 attn_av`` -- is the one novel fusion here: it fuses the KV-cache append with
@@ -44,9 +44,10 @@ Pattern = Tuple[Tuple[str, ...], str]
 
 # Longest patterns first so the greedy scan prefers larger fusion groups.
 PATTERNS: List[Pattern] = [
-    (("rmsnorm", "matmul", "gelu"), "fused_norm_matmul_gelu"),
     (("kv_cache_update", "attn_qk", "attn_softmax", "attn_av"), "fused_attention_kvupdate"),
+    (("rmsnorm", "matmul", "gelu"), "fused_norm_matmul_gelu"),
     (("attn_qk", "attn_softmax", "attn_av"), "fused_attention"),
+    (("add", "rmsnorm"), "fused_add_rmsnorm"),
     (("rmsnorm", "matmul"), "fused_norm_matmul"),
     (("matmul", "gelu"), "fused_matmul_gelu"),
 ]

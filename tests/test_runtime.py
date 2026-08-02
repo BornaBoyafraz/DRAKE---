@@ -67,7 +67,7 @@ def test_fusion_summary_reports_node_reduction():
     summary = engine.fusion_summary()
     assert summary["original_op_count"] == 16
     assert summary["fused_op_count"] == 10
-    assert len(summary["fusions"]) == 3
+    assert len(summary["fusions"]) == 4
 
 
 def test_traffic_saved_bytes_grows_with_sequence_length():
@@ -88,7 +88,7 @@ def test_multi_layer_fusion_is_semantics_preserving():
     num_layers = 3
     graph = build_decode_step_graph(num_layers=num_layers)
     fused_graph, records = FusionPass().run(graph)
-    assert len(records) == 3 * num_layers
+    assert len(records) == 4 * num_layers
 
     dims = make_dims(batch=2, seq_len=9, hidden_dim=32, n_heads=4, head_dim=8, ffn_dim=64)
     weights = init_weights(dims, seed=11, num_layers=num_layers)
@@ -133,7 +133,7 @@ def test_multi_layer_fusion_summary_scales_with_layer_count():
     summary = engine.fusion_summary()
     assert summary["original_op_count"] == 16 * 4
     assert summary["fused_op_count"] == 10 * 4
-    assert len(summary["fusions"]) == 3 * 4
+    assert len(summary["fusions"]) == 4 * 4
 
 
 def test_engine_runs_dce_in_its_pipeline():
