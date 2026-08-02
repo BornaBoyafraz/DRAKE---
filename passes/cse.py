@@ -28,12 +28,10 @@ sub-computation (e.g. a shared projection materialized twice).
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
-
 from ir import Graph, Op
 
 
-def eliminate_common_subexpressions(graph: Graph) -> Tuple[Graph, List[str]]:
+def eliminate_common_subexpressions(graph: Graph) -> tuple[Graph, list[str]]:
     """Return (deduplicated_graph, removed_op_names).
 
     Merges structurally-identical ops, rewiring consumers (and graph outputs)
@@ -42,10 +40,10 @@ def eliminate_common_subexpressions(graph: Graph) -> Tuple[Graph, List[str]]:
     pruned (graph input/output shapes are always retained).
     """
     graph_outputs_set = set(graph.graph_outputs)
-    remap: Dict[str, str] = {}  # duplicate tensor name -> canonical tensor name
-    seen: Dict[Tuple, Op] = {}  # structural key -> canonical op
-    new_ops: List[Op] = []
-    removed: List[str] = []
+    remap: dict[str, str] = {}  # duplicate tensor name -> canonical tensor name
+    seen: dict[tuple, Op] = {}  # structural key -> canonical op
+    new_ops: list[Op] = []
+    removed: list[str] = []
 
     for op in graph.ops:
         rewritten_inputs = [remap.get(t, t) for t in op.inputs]
@@ -54,7 +52,8 @@ def eliminate_common_subexpressions(graph: Graph) -> Tuple[Graph, List[str]]:
 
         canonical = seen.get(key)
         if canonical is not None and not produces_graph_output:
-            for dup_out, canon_out in zip(op.outputs, canonical.outputs):
+            # Same output arity is guaranteed: len(op.outputs) is part of `key`.
+            for dup_out, canon_out in zip(op.outputs, canonical.outputs, strict=True):
                 remap[dup_out] = canon_out
             removed.append(op.name)
             continue

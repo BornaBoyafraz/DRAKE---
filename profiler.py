@@ -10,12 +10,11 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import List, Tuple
 
 
 @dataclass
 class ShapeProfiler:
-    observations: List[Tuple[int, int]] = field(default_factory=list)
+    observations: list[tuple[int, int]] = field(default_factory=list)
     _counts: Counter = field(default_factory=Counter)
 
     def record(self, seq_len: int, batch: int) -> None:
@@ -28,10 +27,10 @@ class ShapeProfiler:
     def histogram(self) -> Counter:
         return Counter(self._counts)
 
-    def dominant(self, top_k: int = 3) -> List[Tuple[Tuple[int, int], int]]:
+    def dominant(self, top_k: int = 3) -> list[tuple[tuple[int, int], int]]:
         return self._counts.most_common(top_k)
 
-    def seq_len_range(self) -> Tuple[int, int]:
+    def seq_len_range(self) -> tuple[int, int]:
         if not self.observations:
             return (0, 0)
         seqs = [s for s, _ in self.observations]

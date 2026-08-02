@@ -1,4 +1,11 @@
-from ir import build_decode_step_graph, cache_io_names, make_dims, num_elements, resolve_shape, weight_names
+from ir import (
+    build_decode_step_graph,
+    cache_io_names,
+    make_dims,
+    num_elements,
+    resolve_shape,
+    weight_names,
+)
 
 
 def test_graph_has_expected_op_count():

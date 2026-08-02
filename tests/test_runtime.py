@@ -75,8 +75,11 @@ def test_traffic_saved_bytes_grows_with_sequence_length():
     batch = 1
     x = np.zeros((batch, 64), dtype=np.float32)
 
-    short = engine.step(x, np.zeros((batch, 4, 4, 16), dtype=np.float32), np.zeros((batch, 4, 4, 16), dtype=np.float32))
-    long = engine.step(x, np.zeros((batch, 2000, 4, 16), dtype=np.float32), np.zeros((batch, 2000, 4, 16), dtype=np.float32))
+    def zeros(seq: int) -> np.ndarray:
+        return np.zeros((batch, seq, 4, 16), dtype=np.float32)
+
+    short = engine.step(x, zeros(4), zeros(4))
+    long = engine.step(x, zeros(2000), zeros(2000))
 
     assert long.traffic_saved_bytes > short.traffic_saved_bytes
 
@@ -119,7 +122,7 @@ def test_multi_layer_engine_runs_decode_loop_with_per_layer_caches():
         assert result.output.shape == (batch, 32)
         assert len(result.cache_k_out) == num_layers
         assert len(result.cache_v_out) == num_layers
-        for k, v in zip(result.cache_k_out, result.cache_v_out):
+        for k, v in zip(result.cache_k_out, result.cache_v_out, strict=True):
             assert k.shape == (batch, step_idx + 1, 4, 8)
             assert v.shape == (batch, step_idx + 1, 4, 8)
         cache_k, cache_v = result.cache_k_out, result.cache_v_out
@@ -185,5 +188,6 @@ def test_engine_pipeline_dce_removes_a_dead_op_from_a_custom_graph():
 
     batch = 1
     x = np.zeros((batch, 64), dtype=np.float32)
-    result = engine.step(x, np.zeros((batch, 2, 4, 16), dtype=np.float32), np.zeros((batch, 2, 4, 16), dtype=np.float32))
+    cache = np.zeros((batch, 2, 4, 16), dtype=np.float32)
+    result = engine.step(x, cache, cache)
     assert result.output.shape == (batch, 64)

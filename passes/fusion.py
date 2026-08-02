@@ -36,14 +36,13 @@ memory.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 from ir import Graph, Op
 
-Pattern = Tuple[Tuple[str, ...], str]
+Pattern = tuple[tuple[str, ...], str]
 
 # Longest patterns first so the greedy scan prefers larger fusion groups.
-PATTERNS: List[Pattern] = [
+PATTERNS: list[Pattern] = [
     (("kv_cache_update", "attn_qk", "attn_softmax", "attn_av"), "fused_attention_kvupdate"),
     (("rmsnorm", "matmul", "gelu"), "fused_norm_matmul_gelu"),
     (("attn_qk", "attn_softmax", "attn_av"), "fused_attention"),
@@ -57,10 +56,10 @@ PATTERNS: List[Pattern] = [
 class FusionRecord:
     fused_op_name: str
     fused_kind: str
-    sub_op_names: List[str]
+    sub_op_names: list[str]
 
 
-def _is_connected_chain(window: List[Op]) -> bool:
+def _is_connected_chain(window: list[Op]) -> bool:
     """Reject coincidental kind-matches that aren't an actual dependency chain."""
     if len(window) == 1:
         return True
@@ -75,7 +74,7 @@ def _is_connected_chain(window: List[Op]) -> bool:
     return len(window) - 1 in reached
 
 
-def _make_fused_op(window: List[Op], fused_kind: str, index: int) -> Op:
+def _make_fused_op(window: list[Op], fused_kind: str, index: int) -> Op:
     name = f"{fused_kind}_{index}"
     all_inputs = [t for op in window for t in op.inputs]
     all_outputs = [t for op in window for t in op.outputs]
@@ -103,7 +102,7 @@ def _make_fused_op(window: List[Op], fused_kind: str, index: int) -> Op:
     )
 
 
-def _rebuild_graph(graph: Graph, new_ops: List[Op]) -> Graph:
+def _rebuild_graph(graph: Graph, new_ops: list[Op]) -> Graph:
     return Graph(
         ops=new_ops,
         shapes=dict(graph.shapes),
@@ -115,8 +114,8 @@ def _rebuild_graph(graph: Graph, new_ops: List[Op]) -> Graph:
 
 class FusionPass:
     def run(
-        self, graph: Graph, patterns: Optional[List[Pattern]] = None
-    ) -> Tuple[Graph, List[FusionRecord]]:
+        self, graph: Graph, patterns: list[Pattern] | None = None
+    ) -> tuple[Graph, list[FusionRecord]]:
         """Greedy, longest-pattern-first, structural selection (no dims
         needed). Scans left to right; at each position takes the first
         matching pattern in `patterns` order (default: `PATTERNS`, already
@@ -125,8 +124,8 @@ class FusionPass:
         patterns = patterns if patterns is not None else PATTERNS
         ops = graph.ops
         n = len(ops)
-        new_ops: List[Op] = []
-        records: List[FusionRecord] = []
+        new_ops: list[Op] = []
+        records: list[FusionRecord] = []
         i = 0
         fuse_idx = 0
         while i < n:
@@ -158,8 +157,8 @@ class FusionPass:
         return _rebuild_graph(graph, new_ops), records
 
     def run_cost_optimal(
-        self, graph: Graph, dims: Dict[str, int], patterns: Optional[List[Pattern]] = None
-    ) -> Tuple[Graph, List[FusionRecord]]:
+        self, graph: Graph, dims: dict[str, int], patterns: list[Pattern] | None = None
+    ) -> tuple[Graph, list[FusionRecord]]:
         """Dynamic-programming selection: the set of non-overlapping pattern
         matches that maximizes *total* analytic HBM-traffic bytes saved for
         this concrete `dims`, not just "take the longest match available".
@@ -173,11 +172,11 @@ class FusionPass:
         ops = graph.ops
         n = len(ops)
 
-        best: List[int] = [0] * (n + 1)
-        choice: List[Optional[Tuple[int, str, int]]] = [None] * n
+        best: list[int] = [0] * (n + 1)
+        choice: list[tuple[int, str, int] | None] = [None] * n
         for i in range(n - 1, -1, -1):
             best_here = best[i + 1]  # leave ops[i] unfused
-            best_choice: Optional[Tuple[int, str, int]] = None
+            best_choice: tuple[int, str, int] | None = None
             for pattern, fused_kind in patterns:
                 length = len(pattern)
                 if i + length > n:
@@ -195,8 +194,8 @@ class FusionPass:
             best[i] = best_here
             choice[i] = best_choice
 
-        new_ops: List[Op] = []
-        records: List[FusionRecord] = []
+        new_ops: list[Op] = []
+        records: list[FusionRecord] = []
         i = 0
         fuse_idx = 0
         while i < n:
@@ -216,7 +215,7 @@ class FusionPass:
         return _rebuild_graph(graph, new_ops), records
 
 
-def _group_traffic_saved(sub_ops: List[Op], original_graph: Graph, dims: Dict[str, int]) -> int:
+def _group_traffic_saved(sub_ops: list[Op], original_graph: Graph, dims: dict[str, int]) -> int:
     """Analytic HBM-traffic bytes saved by fusing this contiguous group of
     sub-ops together, against `original_graph`'s (pre-fusion) consumer
     counts and tensor byte sizes for `dims`.
@@ -241,7 +240,7 @@ def _group_traffic_saved(sub_ops: List[Op], original_graph: Graph, dims: Dict[st
     return total
 
 
-def traffic_saved_bytes(fused_op: Op, original_graph: Graph, dims: Dict[str, int]) -> int:
+def traffic_saved_bytes(fused_op: Op, original_graph: Graph, dims: dict[str, int]) -> int:
     """Analytic HBM-traffic bytes saved by fusing `fused_op`'s sub-ops.
 
     `original_graph` must be the *pre-fusion* graph (e.g. the one passed

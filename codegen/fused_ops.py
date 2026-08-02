@@ -17,13 +17,13 @@ measured GPU wall-clock ones.
 
 from __future__ import annotations
 
-from typing import Callable, Dict
+from collections.abc import Callable
 
 import numpy as np
 
 from ir import Dims, Graph, Op, cache_io_names, weight_names
 
-Tensors = Dict[str, np.ndarray]
+Tensors = dict[str, np.ndarray]
 
 
 def _rmsnorm(t: Tensors, op: Op, dims: Dims) -> None:
@@ -109,7 +109,7 @@ def _gelu(t: Tensors, op: Op, dims: Dims) -> None:
     t[op.outputs[0]] = 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x**3)))
 
 
-OP_FUNCS: Dict[str, Callable[[Tensors, Op, Dims], None]] = {
+OP_FUNCS: dict[str, Callable[[Tensors, Op, Dims], None]] = {
     "rmsnorm": _rmsnorm,
     "matmul": _matmul,
     "split_qkv": _split_qkv,

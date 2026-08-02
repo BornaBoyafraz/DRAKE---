@@ -36,8 +36,6 @@ inputs/outputs are ordinary tensors, and the checks above apply unchanged
 
 from __future__ import annotations
 
-from typing import List
-
 from ir import Graph
 
 
@@ -47,18 +45,18 @@ class GraphVerificationError(ValueError):
     Carries the full list of problems (not just the first) so a caller sees
     everything wrong at once."""
 
-    def __init__(self, errors: List[str]) -> None:
+    def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         joined = "\n  - ".join(errors)
         super().__init__(f"graph failed verification ({len(errors)} error(s)):\n  - {joined}")
 
 
-def collect_graph_errors(graph: Graph) -> List[str]:
+def collect_graph_errors(graph: Graph) -> list[str]:
     """Return a list of invariant violations (empty if the graph is valid).
 
     Non-raising counterpart to ``verify_graph`` -- useful in tests and when
     you want to report every problem rather than stop at the first."""
-    errors: List[str] = []
+    errors: list[str] = []
     graph_inputs = set(graph.graph_inputs)
 
     # Invariant 1 + 2: single assignment, no redefinition of graph inputs.

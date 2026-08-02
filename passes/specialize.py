@@ -16,13 +16,13 @@ exact same boundary comparisons so the two are provably in agreement (see
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Dict, List, Sequence, Tuple
 
 from ir import Graph
 
-DEFAULT_SEQ_BOUNDARIES: Tuple[int, ...] = (128, 1024)
-DEFAULT_BATCH_BOUNDARIES: Tuple[int, ...] = (8,)
+DEFAULT_SEQ_BOUNDARIES: tuple[int, ...] = (128, 1024)
+DEFAULT_BATCH_BOUNDARIES: tuple[int, ...] = (8,)
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class ShapeBucket:
 def build_bucket_table(
     seq_boundaries: Sequence[int] = DEFAULT_SEQ_BOUNDARIES,
     batch_boundaries: Sequence[int] = DEFAULT_BATCH_BOUNDARIES,
-) -> List[ShapeBucket]:
+) -> list[ShapeBucket]:
     seq_edges = [0, *seq_boundaries, -1]
     batch_edges = [0, *batch_boundaries, -1]
     buckets = []
@@ -86,13 +86,13 @@ def classify(
 @dataclass(frozen=True)
 class KernelVariant:
     name: str
-    params: Dict[str, int] = field(default_factory=dict)
+    params: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
 class KernelPlan:
     bucket: ShapeBucket
-    variants: Dict[str, KernelVariant]
+    variants: dict[str, KernelVariant]
 
 
 _ATTENTION_KINDS = {"fused_attention", "fused_attention_kvupdate"}
@@ -101,7 +101,7 @@ _MATMUL_KINDS = {"fused_norm_matmul", "fused_norm_matmul_gelu", "fused_matmul_ge
 
 class SpecializationPass:
     def specialize(self, fused_graph: Graph, bucket: ShapeBucket) -> KernelPlan:
-        variants: Dict[str, KernelVariant] = {}
+        variants: dict[str, KernelVariant] = {}
         for op in fused_graph.ops:
             fused_kind = op.attrs.get("fused_kind", op.kind) if op.kind == "fused" else op.kind
             variants[op.name] = self._variant_for(fused_kind, bucket)

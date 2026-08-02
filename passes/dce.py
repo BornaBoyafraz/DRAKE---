@@ -21,12 +21,10 @@ numpy executor anyway.
 
 from __future__ import annotations
 
-from typing import List, Tuple
-
 from ir import Graph
 
 
-def eliminate_dead_code(graph: Graph) -> Tuple[Graph, List[str]]:
+def eliminate_dead_code(graph: Graph) -> tuple[Graph, list[str]]:
     """Return (pruned_graph, removed_op_names).
 
     Keeps exactly the ops needed to produce ``graph.graph_outputs``; drops

@@ -11,8 +11,8 @@ Call sequence per `step()`:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
@@ -33,10 +33,10 @@ from passes.specialize import (
 from passes.verify import verify_graph
 from profiler import ShapeProfiler
 
-CacheArg = Union[np.ndarray, List[np.ndarray]]
+CacheArg = np.ndarray | list[np.ndarray]
 
 
-def _as_list(arg: CacheArg) -> List[np.ndarray]:
+def _as_list(arg: CacheArg) -> list[np.ndarray]:
     return arg if isinstance(arg, list) else [arg]
 
 
@@ -61,7 +61,7 @@ class DrakeEngine:
         seq_boundaries: Sequence[int] = DEFAULT_SEQ_BOUNDARIES,
         batch_boundaries: Sequence[int] = DEFAULT_BATCH_BOUNDARIES,
         weight_seed: int = 0,
-        graph: Optional[Graph] = None,
+        graph: Graph | None = None,
     ) -> None:
         self.num_layers = num_layers
         self.base_graph = graph if graph is not None else build_decode_step_graph(num_layers)
@@ -95,7 +95,7 @@ class DrakeEngine:
 
         self.profiler = ShapeProfiler()
         self.specializer = SpecializationPass()
-        self.plan_cache: Dict[int, KernelPlan] = {}
+        self.plan_cache: dict[int, KernelPlan] = {}
 
     def step(self, x: np.ndarray, cache_k_in: CacheArg, cache_v_in: CacheArg) -> StepResult:
         """Run one decode step.
@@ -156,7 +156,7 @@ class DrakeEngine:
             traffic_saved_bytes=saved,
         )
 
-    def fusion_summary(self) -> Dict:
+    def fusion_summary(self) -> dict:
         return {
             "original_op_count": len(self.base_graph.ops),
             "fused_op_count": len(self.fused_graph.ops),

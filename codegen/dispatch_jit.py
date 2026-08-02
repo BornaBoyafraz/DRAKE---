@@ -18,8 +18,8 @@ Semantic equivalence between the two is checked exhaustively in
 from __future__ import annotations
 
 import ctypes
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Sequence
 
 from llvmlite import binding as llvm
 from llvmlite import ir

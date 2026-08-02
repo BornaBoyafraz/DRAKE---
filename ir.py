@@ -15,14 +15,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import prod
-from typing import Dict, List, Tuple
+
+Shape = tuple[str, ...]
+Dims = dict[str, int]
 
 
-Shape = Tuple[str, ...]
-Dims = Dict[str, int]
-
-
-def resolve_shape(shape: Shape, dims: Dims) -> Tuple[int, ...]:
+def resolve_shape(shape: Shape, dims: Dims) -> tuple[int, ...]:
     try:
         return tuple(dims[d] for d in shape)
     except KeyError as e:
@@ -38,8 +36,8 @@ def num_elements(shape: Shape, dims: Dims) -> int:
 class Op:
     name: str
     kind: str
-    inputs: List[str]
-    outputs: List[str]
+    inputs: list[str]
+    outputs: list[str]
     attrs: dict = field(default_factory=dict)
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
@@ -51,10 +49,10 @@ class Op:
 
 @dataclass
 class Graph:
-    ops: List[Op]
-    shapes: Dict[str, Shape]
-    graph_inputs: List[str]
-    graph_outputs: List[str]
+    ops: list[Op]
+    shapes: dict[str, Shape]
+    graph_inputs: list[str]
+    graph_outputs: list[str]
     dtype_bytes: int = 4  # fp32
 
     def consumer_count(self, tensor: str) -> int:
@@ -62,7 +60,7 @@ class Graph:
             1 if tensor in self.graph_outputs else 0
         )
 
-    def producer_index(self) -> Dict[str, int]:
+    def producer_index(self) -> dict[str, int]:
         idx = {}
         for i, op in enumerate(self.ops):
             for out in op.outputs:
@@ -179,13 +177,13 @@ def layer_prefix(layer: int, num_layers: int) -> str:
     return f"l{layer}_" if num_layers > 1 else ""
 
 
-def cache_io_names(num_layers: int, layer: int) -> Tuple[str, str, str, str]:
+def cache_io_names(num_layers: int, layer: int) -> tuple[str, str, str, str]:
     """(cache_k_in, cache_v_in, cache_k_out, cache_v_out) tensor names for `layer`."""
     p = layer_prefix(layer, num_layers)
     return f"{p}cache_k_in", f"{p}cache_v_in", f"{p}cache_k_out", f"{p}cache_v_out"
 
 
-def weight_names(num_layers: int, layer: int) -> Dict[str, str]:
+def weight_names(num_layers: int, layer: int) -> dict[str, str]:
     """Map logical weight name -> graph tensor name for `layer`."""
     p = layer_prefix(layer, num_layers)
     return {
@@ -198,7 +196,7 @@ def weight_names(num_layers: int, layer: int) -> Dict[str, str]:
     }
 
 
-def _layer_ops(prefix: str, input_name: str, output_name: str) -> Tuple[List[Op], Dict[str, Shape]]:
+def _layer_ops(prefix: str, input_name: str, output_name: str) -> tuple[list[Op], dict[str, Shape]]:
     """Build one decode-step transformer layer: rmsnorm, QKV projection, RoPE,
     KV-cache append, attention, output projection, FFN. `input_name` /
     `output_name` are the residual-stream tensors that connect layers; every
@@ -208,7 +206,7 @@ def _layer_ops(prefix: str, input_name: str, output_name: str) -> Tuple[List[Op]
     def n(local: str) -> str:
         return f"{prefix}{local}" if prefix else local
 
-    shapes: Dict[str, Shape] = {
+    shapes: dict[str, Shape] = {
         input_name: ("batch", "hidden_dim"),
         n("w_norm1"): ("hidden_dim",),
         n("x_norm"): ("batch", "hidden_dim"),
@@ -286,8 +284,8 @@ def build_decode_step_graph(num_layers: int = 1) -> Graph:
     if num_layers < 1:
         raise ValueError(f"num_layers must be >= 1, got {num_layers}")
 
-    all_ops: List[Op] = []
-    all_shapes: Dict[str, Shape] = {}
+    all_ops: list[Op] = []
+    all_shapes: dict[str, Shape] = {}
     graph_inputs = ["x"]
     graph_outputs = ["output"]
 
