@@ -1,7 +1,7 @@
 # DRAKE — Dynamic Runtime Adaptive Kernel Engine
 
 <p align="left">
-  <a href="https://github.com/BornaBoyafraz/drake/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/BornaBoyafraz/drake/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/BornaBoyafraz/DRAKE---/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/BornaBoyafraz/DRAKE---/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
   <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue.svg">
   <img alt="LLVM via llvmlite" src="https://img.shields.io/badge/codegen-LLVM%20(llvmlite)-4B8BBE.svg">
