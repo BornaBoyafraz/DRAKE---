@@ -29,7 +29,7 @@ Built as a demonstration of the specific skill intersection a **Deep Learning Co
 | Module | Responsibility |
 |---|---|
 | [`ir.py`](ir.py) | A graph IR for `num_layers` stacked transformer decode-step layers (default 1): RMSNorm, QKV projection, RoPE, KV-cache append, attention, output projection, FFN, threaded along a residual stream. Shapes are symbolic (`("batch", "seq_len", "n_heads", "head_dim")`), resolved against a concrete `dims` dict at analysis/execution time. Each layer gets its own weights and KV cache; `num_layers=1` reproduces the original single-layer graph exactly, tensor name for tensor name. `Graph.to_dot()` emits Graphviz DOT (fused nodes and per-edge shape annotations included) for visualizing any graph, fused or not. |
-| [`passes/fusion.py`](passes/fusion.py) | Two fusion-selection strategies over the same candidate patterns, both gated by a **connectivity check** that rejects coincidental kind-matches which aren't a real dependency chain: `FusionPass.run` (greedy, longest-pattern-first, no shape needed — what runs once at engine construction) and `FusionPass.run_cost_optimal` (a DP over the op sequence that provably maximizes total analytic HBM-traffic bytes saved for a concrete `dims`, rather than just taking the longest available match). Includes a **KV-cache-aware fusion** — `kv_cache_update → attn_qk → attn_softmax → attn_av` collapses into one node, so the freshly written K/V for a token is consumed by attention without an intervening HBM round-trip, mirroring the idea behind FlashDecoding / paged-attention kernels. |
+| [`passes/fusion.py`](passes/fusion.py) | Two fusion-selection strategies over the same candidate patterns, both gated by a **connectivity check** that rejects coincidental kind-matches which aren't a real dependency chain: `FusionPass.run` (greedy, longest-pattern-first, no shape needed — what runs once at engine construction) and `FusionPass.run_cost_optimal` (a DP over the op sequence that provably maximizes total analytic HBM-traffic bytes saved for a concrete `dims`, rather than just taking the longest available match). Includes `add → rmsnorm` residual fusion and a **KV-cache-aware fusion** — `kv_cache_update → attn_qk → attn_softmax → attn_av` collapses into one node, so the freshly written K/V for a token is consumed by attention without an intervening HBM round-trip, mirroring the idea behind FlashDecoding / paged-attention kernels. |
 | [`passes/specialize.py`](passes/specialize.py) | Buckets `(seq_len, batch)` and selects a kernel variant per bucket, per fused op — vectorized vs. tiled attention (tile size 64/128), single-block vs. batch-blocked matmul. |
 | [`passes/verify.py`](passes/verify.py) | The IR verifier every real compiler has: checks single-assignment, def-before-use (topological order), that graph outputs are produced, that model parameters vs. dangling references are distinguished, and that every referenced tensor has a declared shape. `DrakeEngine` runs it on the graph both before and after fusion, so a malformed graph fails loudly with a precise message instead of crashing a later pass. |
 | [`passes/dce.py`](passes/dce.py) | Dead-code elimination via a single backward-liveness scan: drops any op whose outputs aren't transitively needed for a graph output, and prunes the now-unreferenced tensor shapes. Runs in the `DrakeEngine` build pipeline right after fusion (and re-verifies) — a no-op on the current hand-built graph, but correct-by-construction for future passes that introduce slack. |
@@ -40,11 +40,13 @@ Built as a demonstration of the specific skill intersection a **Deep Learning Co
 
 Full design writeup — including an explicit line between what's genuinely load-bearing and what's a deliberate stand-in — is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+Contributor setup and correctness requirements are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## The one correctness property that matters
 
-Fusion is only useful if it doesn't change the answer. `tests/test_runtime.py::test_fusion_is_semantics_preserving` runs the same inputs through the original 16-op graph and the fused 10-op graph and asserts the outputs — including the updated KV cache — are numerically identical. The multi-layer variant, `test_multi_layer_fusion_is_semantics_preserving`, checks the same property across a 3-layer stack with independent per-layer KV caches. This isn't a nice-to-have: it's the property that separates a compiler transform from a bug.
+Fusion is only useful if it doesn't change the answer. `tests/test_runtime.py::test_fusion_is_semantics_preserving` runs the same inputs through the original 16-op graph and the fused 10-op graph (four fusion groups) and asserts the outputs — including the updated KV cache — are numerically identical. The multi-layer variant, `test_multi_layer_fusion_is_semantics_preserving`, checks the same property across a 3-layer stack with independent per-layer KV caches. This isn't a nice-to-have: it's the property that separates a compiler transform from a bug.
 
-The DP fusion selector has its own correctness bar: `test_cost_optimal_beats_greedy_on_a_constructed_conflict` builds a small adversarial graph where the greedy longest-pattern-first heuristic provably picks a worse total than the DP optimum, and checks the DP selector actually finds it (8,000 bytes saved vs. greedy's 16). On DRAKE's real pattern table the two currently agree — every overlap there is a strict superset, so greedy can't lose — which `test_cost_optimal_matches_greedy_on_the_real_graph` pins down explicitly.
+The DP fusion selector has its own correctness bar: `test_cost_optimal_beats_greedy_on_a_constructed_conflict` builds a small adversarial graph where the greedy longest-pattern-first heuristic provably picks a worse total than the DP optimum, and checks the DP selector actually finds it (8,000 bytes saved vs. greedy's 16). The real graph now contains an overlap too: greedy sees `add → rmsnorm` first, while `test_cost_optimal_outscores_greedy_on_the_real_graph` proves that the DP can choose the overlapping `rmsnorm → matmul → gelu` group when it saves more traffic.
 
 ## See it run
 
@@ -55,7 +57,8 @@ $ .venv/bin/python examples/decode_demo.py
 original ops: 16  ->  fused ops: 10
   fused_norm_matmul_0          [fused_norm_matmul]        <- ['norm1', 'qkv_proj']
   fused_attention_kvupdate_1   [fused_attention_kvupdate] <- ['kv_update', 'qk', 'softmax', 'av']
-  fused_norm_matmul_gelu_2     [fused_norm_matmul_gelu]   <- ['norm2', 'up_proj', 'act']
+  fused_add_rmsnorm_2          [fused_add_rmsnorm]        <- ['resid1', 'norm2']
+  fused_matmul_gelu_3          [fused_matmul_gelu]        <- ['up_proj', 'act']
 
 === LLVM dispatch IR (drake_dispatch) ===
 define i32 @"drake_dispatch"(i32 %"seq_len", i32 %"batch")
@@ -69,13 +72,13 @@ entry:
 
 | seq_len | bucket | attention variant | analytic traffic saved |
 |---:|---|---|---:|
-| 1 | `seq[0,128)_batch[0,8)` | vector | 56.5 KiB |
-| 130 | `seq[128,1024)_batch[0,8)` | tiled (tile=64) | 1,153.0 KiB |
-| 1,025 | `seq[1024,inf)_batch[0,8)` | tiled (tile=128) | 8,760.5 KiB |
+| 1 | `seq[0,128)_batch[0,8)` | vector | 52.5 KiB |
+| 130 | `seq[128,1024)_batch[0,8)` | tiled (tile=64) | 1,149.0 KiB |
+| 1,025 | `seq[1024,inf)_batch[0,8)` | tiled (tile=128) | 8,756.5 KiB |
 
 *(Analytic HBM-traffic-bytes model — see "Honest scope" below for exactly what that does and doesn't claim.)*
 
-The same run continues with an 8-layer decode loop (`original ops: 128 -> fused ops: 80`, each layer's KV cache tracked independently) and a greedy-vs-DP fusion comparison.
+The same run continues with an 8-layer decode loop (`original ops: 128 -> fused ops: 80`, 32 fusion groups, each layer's KV cache tracked independently) and a greedy-vs-DP fusion comparison.
 
 ## Quickstart
 
@@ -83,7 +86,7 @@ The same run continues with an 8-layer decode loop (`original ops: 128 -> fused 
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 
-.venv/bin/pytest -q                      # 35 tests: IR, multi-layer graphs,
+.venv/bin/pytest -q                      # 74 tests: IR, multi-layer graphs,
                                           # fusion legality, cost-optimal
                                           # (DP) fusion selection, bucket/LLVM
                                           # agreement, end-to-end numeric
@@ -95,6 +98,10 @@ python3 -m venv .venv
                                           # decode loop + multi-layer demo +
                                           # greedy-vs-DP fusion comparison
 ```
+
+After installing, run the complete local quality gate at any time with `make gate`.
+
+An optional [pre-commit configuration](.pre-commit-config.yaml) runs Ruff with fixes plus basic whitespace cleanup.
 
 No GPU, no external services, no network calls — the whole pipeline runs locally in a plain virtualenv. The same three checks (`pytest`, `ruff`, `mypy`) run in CI on every push — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
