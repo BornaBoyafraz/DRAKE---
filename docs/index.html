@@ -155,7 +155,7 @@
       <a class="btn btn-ghost" href="#approach">How it works ↓</a>
     </div>
     <div class="badges">
-      <span class="badge"><b>68</b> tests passing</span>
+      <span class="badge"><b>74</b> tests passing</span>
       <span class="badge">LLVM via <b>llvmlite</b></span>
       <span class="badge">CI: pytest · ruff · mypy</span>
       <span class="badge"><b>MIT</b> licensed</span>
@@ -248,16 +248,16 @@ entry:
       <table>
         <thead><tr><th>seq_len</th><th>bucket</th><th>attention variant</th><th class="right">traffic saved</th></tr></thead>
         <tbody>
-          <tr><td class="mono">1</td><td class="mono">seq[0,128)</td><td>vector</td><td class="right mono">56.5 KiB</td></tr>
-          <tr><td class="mono">130</td><td class="mono">seq[128,1024)</td><td>tiled · 64</td><td class="right mono">1,153 KiB</td></tr>
-          <tr><td class="mono">1,025</td><td class="mono">seq[1024,∞)</td><td>tiled · 128</td><td class="right mono">8,760 KiB</td></tr>
-          <tr><td class="mono">2,048</td><td class="mono">seq[1024,∞)</td><td>tiled · 128</td><td class="right mono">17,456 KiB</td></tr>
+          <tr><td class="mono">1</td><td class="mono">seq[0,128)</td><td>vector</td><td class="right mono">52.5 KiB</td></tr>
+          <tr><td class="mono">130</td><td class="mono">seq[128,1024)</td><td>tiled · 64</td><td class="right mono">1,149 KiB</td></tr>
+          <tr><td class="mono">1,025</td><td class="mono">seq[1024,∞)</td><td>tiled · 128</td><td class="right mono">8,756 KiB</td></tr>
+          <tr><td class="mono">2,048</td><td class="mono">seq[1024,∞)</td><td>tiled · 128</td><td class="right mono">17,452 KiB</td></tr>
         </tbody>
       </table>
     </div>
     <div class="stats" style="margin-top:22px">
       <div class="stat"><div class="v">16→10</div><div class="l">ops fused / layer</div></div>
-      <div class="stat"><div class="v">68</div><div class="l">tests, all green</div></div>
+      <div class="stat"><div class="v">74</div><div class="l">tests, all green</div></div>
       <div class="stat"><div class="v">6</div><div class="l">compiler passes</div></div>
       <div class="stat"><div class="v">0</div><div class="l">GPUs required</div></div>
     </div>
