@@ -155,7 +155,7 @@
       <a class="btn btn-ghost" href="#approach">How it works ↓</a>
     </div>
     <div class="badges">
-      <span class="badge"><b>74</b> tests passing</span>
+      <span class="badge"><b>101</b> tests passing</span>
       <span class="badge">LLVM via <b>llvmlite</b></span>
       <span class="badge">CI: pytest · ruff · mypy</span>
       <span class="badge"><b>MIT</b> licensed</span>
@@ -197,7 +197,7 @@
       <div class="stage"><div class="n">02 · passes/fusion.py</div><div class="t">Fusion</div><div class="d">Greedy + cost-optimal DP. KV-cache-aware.</div></div>
       <div class="stage hl"><div class="n">03 · codegen/dispatch_jit.py</div><div class="t">LLVM JIT</div><div class="d">Bucket classifier → real LLVM IR → native.</div></div>
       <div class="stage"><div class="n">04 · passes/specialize.py</div><div class="t">Specialize</div><div class="d">Kernel variant per bucket, per fused op.</div></div>
-      <div class="stage"><div class="n">05 · codegen/fused_ops.py</div><div class="t">Execute</div><div class="d">numpy reference — proves correctness.</div></div>
+      <div class="stage"><div class="n">05 · codegen/fused_ops.py</div><div class="t">Execute</div><div class="d">numpy reference; matmuls lowerable to LLVM.</div></div>
     </div>
 
     <div class="g2" style="margin-top:30px">
@@ -229,7 +229,7 @@ entry:
     <p class="lead">Each piece is independently tested — not a mock. Fusion, DCE and CSE are all proven semantics-preserving against the numpy executor.</p>
     <div class="g3" style="margin-top:26px">
       <div class="card"><div class="k">Operator fusion</div><h3>Greedy + cost-optimal DP</h3><p>Longest-pattern-first for construction, plus a DP that provably maximizes analytic HBM-traffic saved for a concrete shape.</p></div>
-      <div class="card"><div class="k">LLVM codegen</div><h3>JIT dispatch</h3><p>Bucket classifier lowered to LLVM IR via llvmlite, JIT-compiled, called through ctypes. Verified against a Python reference over a dense grid.</p></div>
+      <div class="card"><div class="k">LLVM codegen</div><h3>JIT dispatch + kernels</h3><p>Bucket classifier <em>and</em> real compute — elementwise ops plus a nested-loop matmul — lowered to LLVM IR, JIT-compiled, and run on float32 buffers via ctypes. A whole decode step's GEMMs can run as native code.</p></div>
       <div class="card"><div class="k">Specialization</div><h3>Shape buckets</h3><p>Buckets (seq_len, batch) and picks a kernel variant per fused op — vector vs. tiled attention, tile size, batch blocking.</p></div>
       <div class="card"><div class="k">Analysis</div><h3>IR verifier</h3><p>Single-assignment, def-before-use, output reachability, parameters vs. dangling refs — the safety net every other pass relies on.</p></div>
       <div class="card"><div class="k">Cleanup</div><h3>DCE + CSE</h3><p>Dead-code elimination and common-subexpression elimination, both wired into the engine build and re-verified after they run.</p></div>
@@ -257,8 +257,8 @@ entry:
     </div>
     <div class="stats" style="margin-top:22px">
       <div class="stat"><div class="v">16→10</div><div class="l">ops fused / layer</div></div>
-      <div class="stat"><div class="v">74</div><div class="l">tests, all green</div></div>
-      <div class="stat"><div class="v">6</div><div class="l">compiler passes</div></div>
+      <div class="stat"><div class="v">101</div><div class="l">tests, all green</div></div>
+      <div class="stat"><div class="v">LLVM</div><div class="l">dispatch + kernels</div></div>
       <div class="stat"><div class="v">0</div><div class="l">GPUs required</div></div>
     </div>
   </div>

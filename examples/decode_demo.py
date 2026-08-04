@@ -14,7 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 
-from codegen.llvm_kernels import KERNEL_REFERENCE, compile_elementwise_kernel
+from codegen.fused_ops import execute_graph, init_step_inputs, init_weights
+from codegen.llvm_kernels import (
+    KERNEL_REFERENCE,
+    compile_elementwise_kernel,
+    llvm_op_overrides,
+)
 from ir import build_decode_step_graph, make_dims
 from passes.fusion import FusionPass, traffic_saved_bytes
 from runtime import DrakeEngine
@@ -115,11 +120,31 @@ def llvm_kernel_demo() -> None:
     print("  the loop body -- getelementptr/load/fmul/fadd/store -- is native code, verified against numpy")
 
 
+def llvm_matmul_backend_demo() -> None:
+    print("\n=== Decode step with matmuls lowered to LLVM (not NumPy) ===")
+    graph = build_decode_step_graph()
+    fused, _ = FusionPass().run(graph)
+    dims = make_dims(batch=2, seq_len=8, hidden_dim=32, n_heads=4, head_dim=8, ffn_dim=64)
+    tensors = {**init_weights(dims, seed=4), **init_step_inputs(dims, seed=6)}
+
+    numpy_out = execute_graph(fused, tensors, dims)
+    llvm_out = execute_graph(fused, tensors, dims, op_overrides=llvm_op_overrides())
+
+    err = max(
+        float(np.max(np.abs(numpy_out[name] - llvm_out[name])))
+        for name in ("output", "cache_k_out", "cache_v_out")
+    )
+    print("every matmul ran as JIT-compiled  void drake_matmul(float* C, float* A, float* B, i32 M, N, K)")
+    print(f"max|numpy_backend - llvm_backend| = {err:.2e}  (equal within float32 accumulation order)")
+    print("  same graph, same passes -- only the matmul lowering changed, via execute_graph(op_overrides=...)")
+
+
 def main() -> None:
     single_layer_demo()
     multi_layer_demo()
     cost_optimal_fusion_demo()
     llvm_kernel_demo()
+    llvm_matmul_backend_demo()
 
 
 if __name__ == "__main__":

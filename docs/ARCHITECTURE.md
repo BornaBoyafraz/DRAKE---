@@ -103,7 +103,20 @@ layers — by recursing into a `FusedOp`'s original sub-ops. This is what makes
 `test_fusion_is_semantics_preserving` (and its multi-layer counterpart)
 meaningful: the fused graph and the original graph must produce bit-identical
 output. `init_weights`/`init_step_inputs` take `num_layers` and draw each
-layer's tensors from an independent RNG stream.
+layer's tensors from an independent RNG stream. `execute_graph` also takes an
+`op_overrides` map (op-kind → alternate implementation, applied recursively
+inside fused ops), so selected ops can be lowered through another backend
+without touching the IR or passes.
+
+**`codegen/llvm_kernels.py`** — LLVM codegen for real compute, not just the
+dispatch control flow: elementwise `add`/`mul`/`axpy` and a row-major matmul
+(`C[M,N] = A[M,K] @ B[K,N]`, three nested LLVM IR loops with the dot product
+accumulated in a phi register), each emitted as IR, verified, MCJIT-compiled,
+and called on float32 buffers via `ctypes`. `llvm_op_overrides()` routes the
+graph's `matmul` ops through the JIT'd GEMM, so an entire decode step runs its
+matmuls as native code and still matches the numpy backend within float32
+tolerance — the `op_overrides` seam is exactly where a Triton/CUTLASS backend
+would attach.
 
 **`runtime.py`** — `DrakeEngine` wires all of the above into a
 per-step `.step(x, cache_k, cache_v)` call: profile the shape, classify it
