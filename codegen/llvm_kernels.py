@@ -180,23 +180,180 @@ class ElementwiseKernel:
         return out
 
 
-def compile_elementwise_kernel(op: str) -> ElementwiseKernel:
-    """Generate, verify, JIT-compile, and wrap the elementwise kernel `op`."""
+def _jit_module(module: ir.Module, fn_name: str) -> tuple[llvm.ExecutionEngine, int, str]:
+    """Verify, MCJIT-compile a module, and return (engine, function pointer,
+    IR text). The engine owns the compiled code and must be kept alive."""
     _ensure_llvm_initialized()
-    needs_alpha, _ = _KERNELS[op]
-    module = build_kernel_module(op)
     ir_text = str(module)
-
     llvm_module = llvm.parse_assembly(ir_text)
     llvm_module.verify()
-
     target_machine = llvm.Target.from_default_triple().create_target_machine()
     engine = llvm.create_mcjit_compiler(llvm.parse_assembly(""), target_machine)
     engine.add_module(llvm_module)
     engine.finalize_object()
     engine.run_static_constructors()
+    return engine, engine.get_function_address(fn_name), ir_text
 
-    fn_ptr = engine.get_function_address(f"drake_ew_{op}")
+
+def compile_elementwise_kernel(op: str) -> ElementwiseKernel:
+    """Generate, verify, JIT-compile, and wrap the elementwise kernel `op`."""
+    needs_alpha, _ = _KERNELS[op]
+    engine, fn_ptr, ir_text = _jit_module(build_kernel_module(op), f"drake_ew_{op}")
     return ElementwiseKernel(
         op=op, needs_alpha=needs_alpha, ir_text=ir_text, _engine=engine, _fn_ptr=fn_ptr
     )
+
+
+def build_matmul_module() -> ir.Module:
+    """Emit ``void drake_matmul(float* C, float* A, float* B, i32 M, i32 N,
+    i32 K)`` computing the row-major product ``C[M,N] = A[M,K] @ B[K,N]``.
+
+    Three nested loops (m, n, k) with the dot-product accumulated in a
+    register (an ``acc`` phi threaded through the k-loop), 2D indexing done
+    explicitly as ``row * stride + col`` -- the canonical naive GEMM, but as
+    genuine LLVM IR that JIT-compiles to native code.
+    """
+    module = ir.Module(name="drake_matmul")
+    f32 = ir.FloatType()
+    f32p = ir.PointerType(f32)
+    i32 = ir.IntType(32)
+
+    fn_ty = ir.FunctionType(ir.VoidType(), [f32p, f32p, f32p, i32, i32, i32])
+    fn = ir.Function(module, fn_ty, name="drake_matmul")
+    c, a, b, m_dim, n_dim, k_dim = fn.args
+    c.name, a.name, b.name, m_dim.name, n_dim.name, k_dim.name = "C", "A", "B", "M", "N", "K"
+
+    entry = fn.append_basic_block("entry")
+    m_cond = fn.append_basic_block("m.cond")
+    m_body = fn.append_basic_block("m.body")
+    n_cond = fn.append_basic_block("n.cond")
+    n_body = fn.append_basic_block("n.body")
+    k_cond = fn.append_basic_block("k.cond")
+    k_body = fn.append_basic_block("k.body")
+    k_end = fn.append_basic_block("k.end")
+    n_latch = fn.append_basic_block("n.latch")
+    m_latch = fn.append_basic_block("m.latch")
+    exit_bb = fn.append_basic_block("exit")
+
+    zero = ir.Constant(i32, 0)
+    one = ir.Constant(i32, 1)
+    fzero = ir.Constant(f32, 0.0)
+
+    bld = ir.IRBuilder(entry)
+    bld.branch(m_cond)
+
+    # for m in range(M)
+    bld.position_at_end(m_cond)
+    m = bld.phi(i32, name="m")
+    m.add_incoming(zero, entry)
+    bld.cbranch(bld.icmp_signed("<", m, m_dim), m_body, exit_bb)
+
+    bld.position_at_end(m_body)
+    bld.branch(n_cond)
+
+    # for n in range(N)
+    bld.position_at_end(n_cond)
+    n = bld.phi(i32, name="n")
+    n.add_incoming(zero, m_body)
+    bld.cbranch(bld.icmp_signed("<", n, n_dim), n_body, m_latch)
+
+    bld.position_at_end(n_body)
+    bld.branch(k_cond)
+
+    # acc = 0; for k in range(K): acc += A[m,k] * B[k,n]
+    bld.position_at_end(k_cond)
+    k = bld.phi(i32, name="k")
+    acc = bld.phi(f32, name="acc")
+    k.add_incoming(zero, n_body)
+    acc.add_incoming(fzero, n_body)
+    bld.cbranch(bld.icmp_signed("<", k, k_dim), k_body, k_end)
+
+    bld.position_at_end(k_body)
+    a_idx = bld.add(bld.mul(m, k_dim), k)  # m*K + k
+    b_idx = bld.add(bld.mul(k, n_dim), n)  # k*N + n
+    a_val = bld.load(bld.gep(a, [a_idx], inbounds=True))
+    b_val = bld.load(bld.gep(b, [b_idx], inbounds=True))
+    acc_next = bld.fadd(acc, bld.fmul(a_val, b_val))
+    k_next = bld.add(k, one)
+    k.add_incoming(k_next, k_body)
+    acc.add_incoming(acc_next, k_body)
+    bld.branch(k_cond)
+
+    # C[m,n] = acc
+    bld.position_at_end(k_end)
+    c_idx = bld.add(bld.mul(m, n_dim), n)  # m*N + n
+    bld.store(acc, bld.gep(c, [c_idx], inbounds=True))
+    bld.branch(n_latch)
+
+    bld.position_at_end(n_latch)
+    n.add_incoming(bld.add(n, one), n_latch)
+    bld.branch(n_cond)
+
+    bld.position_at_end(m_latch)
+    m.add_incoming(bld.add(m, one), m_latch)
+    bld.branch(m_cond)
+
+    bld.position_at_end(exit_bb)
+    bld.ret_void()
+    return module
+
+
+@dataclass
+class MatmulKernel:
+    """A JIT-compiled row-major float32 GEMM. Keep it alive while calling."""
+
+    ir_text: str
+    _engine: llvm.ExecutionEngine
+    _fn_ptr: int
+
+    def __call__(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        af = np.ascontiguousarray(a, dtype=np.float32)
+        bf = np.ascontiguousarray(b, dtype=np.float32)
+        if af.ndim != 2 or bf.ndim != 2 or af.shape[1] != bf.shape[0]:
+            raise ValueError(f"incompatible matmul shapes: {af.shape} @ {bf.shape}")
+        m_dim, k_dim = af.shape
+        k2, n_dim = bf.shape
+        out = np.zeros((m_dim, n_dim), dtype=np.float32)
+
+        f32p = ctypes.POINTER(ctypes.c_float)
+        cfunc = ctypes.CFUNCTYPE(
+            None, f32p, f32p, f32p, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32
+        )(self._fn_ptr)
+        cfunc(
+            out.ctypes.data_as(f32p),
+            af.ctypes.data_as(f32p),
+            bf.ctypes.data_as(f32p),
+            ctypes.c_int32(m_dim),
+            ctypes.c_int32(n_dim),
+            ctypes.c_int32(k_dim),
+        )
+        return out
+
+
+def compile_matmul_kernel() -> MatmulKernel:
+    """Generate, verify, JIT-compile, and wrap the row-major GEMM kernel."""
+    engine, fn_ptr, ir_text = _jit_module(build_matmul_module(), "drake_matmul")
+    return MatmulKernel(ir_text=ir_text, _engine=engine, _fn_ptr=fn_ptr)
+
+
+_MATMUL_KERNEL: MatmulKernel | None = None
+
+
+def llvm_op_overrides() -> dict[str, Callable]:
+    """Op-kind -> implementation map for ``fused_ops.execute_graph``, lowering
+    ``matmul`` through the LLVM-JIT'd GEMM (compiled once, then cached).
+
+    Passing this to ``execute_graph(..., op_overrides=llvm_op_overrides())``
+    runs an entire decode step's matmuls as native LLVM-compiled code instead
+    of NumPy, without changing the IR or any pass. The decode graph's matmuls
+    are all 2D, which is exactly what ``MatmulKernel`` handles.
+    """
+    global _MATMUL_KERNEL
+    if _MATMUL_KERNEL is None:
+        _MATMUL_KERNEL = compile_matmul_kernel()
+    kernel = _MATMUL_KERNEL
+
+    def _matmul(t, op, dims):  # type: ignore[no-untyped-def]
+        t[op.outputs[0]] = kernel(t[op.inputs[0]], t[op.inputs[1]])
+
+    return {"matmul": _matmul}

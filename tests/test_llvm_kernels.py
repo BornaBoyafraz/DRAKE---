@@ -4,7 +4,9 @@ import pytest
 from codegen.llvm_kernels import (
     KERNEL_REFERENCE,
     build_kernel_module,
+    build_matmul_module,
     compile_elementwise_kernel,
+    compile_matmul_kernel,
 )
 
 
@@ -94,3 +96,45 @@ def test_two_kernels_are_independent():
     y = np.array([4, 5, 6], dtype=np.float32)
     np.testing.assert_array_equal(add(x, y), x + y)
     np.testing.assert_array_equal(mul(x, y), x * y)
+
+
+# ---- matmul kernel -------------------------------------------------------
+
+
+def test_matmul_ir_has_three_nested_loops_and_accumulator():
+    ir_text = str(build_matmul_module())
+    assert "drake_matmul" in ir_text
+    # m, n, k induction phis + acc phi = 4 phi nodes
+    assert ir_text.count("phi") >= 4
+    assert "fmul" in ir_text and "fadd" in ir_text
+    assert ir_text.count("getelementptr") >= 3  # A, B, C indexing
+
+
+@pytest.mark.parametrize(
+    "m,k,n",
+    [(1, 1, 1), (2, 3, 4), (8, 8, 8), (1, 16, 5), (7, 1, 3), (16, 32, 24)],
+)
+def test_matmul_matches_numpy(m, k, n):
+    kernel = compile_matmul_kernel()
+    rng = np.random.default_rng(m * 100 + k * 10 + n)
+    a = rng.standard_normal((m, k)).astype(np.float32)
+    b = rng.standard_normal((k, n)).astype(np.float32)
+    got = kernel(a, b)
+    expected = a @ b
+    # Scalar fp32 accumulation vs. NumPy/BLAS differs only in rounding order.
+    np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+    assert got.shape == (m, n)
+
+
+def test_matmul_coerces_dtype_and_layout():
+    kernel = compile_matmul_kernel()
+    a = np.arange(6, dtype=np.float64).reshape(2, 3)
+    b = np.arange(12, dtype=np.int32).reshape(3, 4)
+    got = kernel(a, b)
+    np.testing.assert_allclose(got, a.astype(np.float32) @ b.astype(np.float32), rtol=1e-4)
+
+
+def test_matmul_shape_mismatch_raises():
+    kernel = compile_matmul_kernel()
+    with pytest.raises(ValueError, match="incompatible matmul shapes"):
+        kernel(np.zeros((2, 3), dtype=np.float32), np.zeros((4, 5), dtype=np.float32))

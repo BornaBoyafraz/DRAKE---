@@ -124,19 +124,33 @@ OP_FUNCS: dict[str, Callable[[Tensors, Op, Dims], None]] = {
 }
 
 
-def execute_op(tensors: Tensors, op: Op, dims: Dims) -> None:
+OpFunc = Callable[[Tensors, Op, Dims], None]
+
+
+def execute_op(
+    tensors: Tensors, op: Op, dims: Dims, op_overrides: dict[str, OpFunc] | None = None
+) -> None:
     if op.kind == "fused":
         for sub_op in op.attrs["sub_ops"]:
-            execute_op(tensors, sub_op, dims)
+            execute_op(tensors, sub_op, dims, op_overrides)
     else:
-        OP_FUNCS[op.kind](tensors, op, dims)
+        impl = (op_overrides or {}).get(op.kind) or OP_FUNCS[op.kind]
+        impl(tensors, op, dims)
 
 
-def execute_graph(graph: Graph, tensors: Tensors, dims: Dims) -> Tensors:
-    """Run every op in `graph` (fused or not) and return the full tensor dict."""
+def execute_graph(
+    graph: Graph, tensors: Tensors, dims: Dims, op_overrides: dict[str, OpFunc] | None = None
+) -> Tensors:
+    """Run every op in `graph` (fused or not) and return the full tensor dict.
+
+    `op_overrides` maps an op *kind* to an alternate implementation, letting a
+    caller lower selected ops through a different backend (e.g. the LLVM-JIT'd
+    matmul in ``codegen.llvm_kernels``) without touching the IR or the passes.
+    Overrides apply recursively inside fused ops too.
+    """
     tensors = dict(tensors)
     for op in graph.ops:
-        execute_op(tensors, op, dims)
+        execute_op(tensors, op, dims, op_overrides)
     return tensors
 
 
